@@ -1,0 +1,46 @@
+Phreak by Phragma - installation
+================================
+
+macOS (Apple Silicon et Intel, macOS 10.13 ou plus recent)
+----------------------------------------------------------
+1. Copie "Phreak.vst3" dans :
+       ~/Library/Audio/Plug-Ins/VST3/
+2. Le plugin n'est pas notarise par Apple : dans l'app Terminal,
+       xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/Phreak.vst3
+3. Relance ton DAW et rescanne les plugins. Phreak est un INSTRUMENT :
+   mets-le sur une piste MIDI.
+
+Windows (64 bits)
+-----------------
+1. Copie le DOSSIER "Phreak.vst3" dans C:\Program Files\Common Files\VST3\
+2. Relance ton DAW et rescanne les plugins.
+
+
+Utilisation
+-----------
+SAMPLES    4 emplacements. Glisse un ou plusieurs fichiers (wav, aiff, flac, ogg, mp3)
+           sur la forme d'onde, ou LOAD. Le projet garde le CHEMIN du fichier :
+           ne le deplace pas (sinon MISSING : recharge-le).
+FORME      16 points de depart. Glisser un point : le deplacer (Maj : fin,
+D'ONDE     Alt : sans SNAP). Double-clic : pose le point choisi ici.
+           Molette : zoom. Glisser le fond : defiler.
+POINT      Pour le point choisi : SAMPLE, DIRECTION (FWD / REV / PING-PONG),
+           STUTTER (retrigger interne, cale sur le tempo), FX TAIL, POSITION,
+           PITCH (vitesse, facon bande), GAIN, PAN, FILTER (gauche passe-bas,
+           droite passe-haut), envois REVERB et DELAY.
+FX TAIL    KEEP : la reverb / le delay continuent apres le passage a un autre
+           point. CUT : ils s'eteignent net quand on quitte ce point.
+RANDOM     POINTS = nombre de points utilises. RANDOMIZE : positions (et plus).
+           SNAP : les positions tombent sur les transitoires ou sur un passage a
+           zero. SPREAD : repartis. TRANSIENTS : sur les transitoires.
+           SEED : le hasard est fixe par ce numero ; LOCK : la sequence rejoue
+           exactement pareil a chaque tour. CHANCE : probabilite qu'un pas
+           declenche. REVERSE : probabilite qu'un pas joue a l'envers.
+           SCATTER : decale le depart au hasard (ms).
+SEQUENCER  GRID : la grille dit quel point joue a chaque pas (- = TIE, x = REST).
+           CYCLE : points 1 > N dans l'ordre. RANDOM : un point au hasard par pas.
+           PLAY WITH TRANSPORT : joue quand Ableton joue. NOTE : joue tant qu'une
+           note est tenue. SYNC eteint : temps libre (FREE TIME, DRIFT).
+           SWING, GATE (longueur jouee de chaque pas), FADE (anti-clic).
+MIDI       C1 = point 1 ... D#2 = point 16 (joue ce point tant que la note est
+           tenue). Les autres notes transposent la sequence (C3 = normal).
