@@ -25,9 +25,10 @@ FORME      16 points de depart. Glisser un point : le deplacer (Maj : fin,
 D'ONDE     Alt : sans SNAP). Double-clic : pose le point choisi ici.
            Molette : zoom. Glisser le fond : defiler.
 POINT      Pour le point choisi : SAMPLE, DIRECTION (FWD / REV / PING-PONG),
-           STUTTER (retrigger interne, cale sur le tempo), FX TAIL, POSITION,
-           PITCH (vitesse, facon bande), GAIN, PAN, FILTER (gauche passe-bas,
-           droite passe-haut), envois REVERB et DELAY.
+           LOOP on/off + vitesse (relance calee sur le tempo, AVANT la reverb et
+           le delay), FX TAIL, POSITION, PITCH (vitesse, facon bande), GAIN, PAN,
+           FILTER (gauche passe-bas, droite passe-haut), envois REVERB et DELAY.
+           Sous chaque numero : 3 temoins L / R / D = loop, reverb, delay en ce moment.
 FX TAIL    KEEP : la reverb / le delay continuent apres le passage a un autre
            point. CUT : ils s'eteignent net quand on quitte ce point.
 RANDOM     POINTS = nombre de points utilises. RANDOMIZE : positions (et plus).
@@ -37,10 +38,21 @@ RANDOM     POINTS = nombre de points utilises. RANDOMIZE : positions (et plus).
            exactement pareil a chaque tour. CHANCE : probabilite qu'un pas
            declenche. REVERSE : probabilite qu'un pas joue a l'envers.
            SCATTER : decale le depart au hasard (ms).
-SEQUENCER  GRID : la grille dit quel point joue a chaque pas (- = TIE, x = REST).
-           CYCLE : points 1 > N dans l'ordre. RANDOM : un point au hasard par pas.
-           PLAY WITH TRANSPORT : joue quand Ableton joue. NOTE : joue tant qu'une
-           note est tenue. SYNC eteint : temps libre (FREE TIME, DRIFT).
-           SWING, GATE (longueur jouee de chaque pas), FADE (anti-clic).
+SEQUENCER  ORDER : GRID (la grille dit quel point joue : - = TIE, x = REST), UP,
+           DOWN, UP-DOWN, RANDOM, SHUFFLE (tous les points une fois par tour, ordre
+           tire au hasard), DRUNK (point voisin). RATE = vitesse de passage, HOLD =
+           nombre de pas sur chaque point. PLAY WITH NOTE (par defaut) : une note
+           longue fait tourner la sequence ; quand Ableton joue, les pas restent
+           cales sur la grille du morceau. TRANSPORT : joue quand Ableton joue.
+           SYNC eteint : temps libre (FREE TIME, DRIFT). SWING, GATE,
+           ATTACK / RELEASE (anti-clic, l'ATTACK sert aussi aux bords des loops).
+REFRESH    Tous les N temps (cale sur la grille), tire a nouveau au hasard :
+           POSITIONS (RANGE 100 % = n'importe ou ; moins = autour de ta position ;
+           + SAMPLE = change aussi de sample ; SNAP s'applique), LOOPS (CHANCE =
+           part des points qui bouclent ; + RATE = vitesse du loop tiree aussi),
+           REVERB et DELAY (CHANCE = part des points qui envoient ; un point dont
+           l'envoi est a 0 envoie 50 %). LINK ALL : tout suit EVERY ; sinon chaque
+           voie a son propre rythme. Avec SEED + LOCK le motif des pas se repete,
+           les rafraichissements continuent de changer.
 MIDI       C1 = point 1 ... D#2 = point 16 (joue ce point tant que la note est
            tenue). Les autres notes transposent la sequence (C3 = normal).

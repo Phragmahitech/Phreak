@@ -111,7 +111,7 @@ private:
     float dragStartPos = 0.0f, dragStartX = 0.0f;
     int lastGeneration = -1;
     juce::Image cache;
-    float playPos = -1.0f;
+    float playPos = -1.0f, lastEffSum = 0.0f;
     int playPoint = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (WaveView)
@@ -164,7 +164,7 @@ class PhreakFacade final : public juce::Component,
                            private juce::Timer
 {
 public:
-    static constexpr int width = 1280, height = 860;
+    static constexpr int width = 1280, height = 960;
 
     explicit PhreakFacade (PhreakAudioProcessor&);
     ~PhreakFacade() override;
@@ -178,6 +178,7 @@ public:
     void showSlot (int slot);
 
     void paint (juce::Graphics&) override;
+    void paintOverChildren (juce::Graphics&) override;
 
     juce::Component* findControl (const juce::String& componentId);
 
@@ -220,7 +221,9 @@ private:
     juce::TextButton pointChips[16];
     juce::Slider posKnob, pitchKnob, gainKnob, panKnob, filterKnob, revKnob, dlyKnob;
     ChoiceSwitch pointSampleSwitch, dirSwitch, tailSwitch;
-    ChoiceMenu stutterMenu;
+    ChoiceMenu loopRateMenu;
+    juce::TextButton loopButton { "LOOP" };
+    std::unique_ptr<APVTS::ButtonAttachment> loopA;
     std::unique_ptr<APVTS::SliderAttachment> posA, pitchA, gainA, panA, filterA, revA, dlyA;
 
     // Hasard
@@ -230,10 +233,15 @@ private:
     ChoiceSwitch snapSwitch;
 
     // Séquenceur
-    ChoiceSwitch modeSwitch, triggerSwitch;
-    ChoiceMenu rateMenu;
+    ChoiceSwitch triggerSwitch;
+    ChoiceMenu rateMenu, orderMenu;
     juce::TextButton syncButton { "SYNC" }, patternButton { "PATTERN" };
-    juce::Slider stepsKnob, freeKnob, driftKnob, swingKnob, gateKnob, fadeKnob;
+    juce::Slider stepsKnob, freeKnob, driftKnob, swingKnob, gateKnob, attackKnob, releaseKnob, holdKnob;
+
+    // Rafraîchissements
+    ChoiceMenu refreshRateMenu, laneRateMenus[4];
+    juce::TextButton linkButton { "LINK ALL" }, laneButtons[4], samplesButton { "+ SAMPLE" }, loopRateButton { "+ RATE" };
+    juce::Slider laneKnobs[4];
 
     // Effets et sortie
     juce::Slider revSizeKnob, revDampKnob, revWidthKnob, revLevelKnob, dlyFbKnob, dlyToneKnob, dlyLevelKnob, gainKnobOut;

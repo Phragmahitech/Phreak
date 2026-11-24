@@ -127,7 +127,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout PhreakAudioProcessor::create
 
     // Séquenceur
     add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { pointsId, 1 }, "Points", 1, numPoints, 8));
-    add (choiceParam (modeId, "Mode", { "GRID", "CYCLE", "RANDOM" }, 0));
+    add (choiceParam (modeId, "Order", { "GRID", "UP", "DOWN", "UP-DOWN", "RANDOM", "SHUFFLE", "DRUNK" }, 0));
     add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { stepsId, 1 }, "Steps", 1, numSteps, 16));
     add (choiceParam (rateId, "Rate", toArray (phreak::Divisions::rateNames()), 5));
     add (boolParam (syncId, "Sync", true));
@@ -138,11 +138,29 @@ juce::AudioProcessorValueTreeState::ParameterLayout PhreakAudioProcessor::create
     add (floatParam (gateId, "Gate", { 5.0f, 100.0f, 0.1f }, 100.0f, percent));
     add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { seedId, 1 }, "Seed", 1, 9999, 1));
     add (boolParam (lockId, "Lock", true));
-    add (choiceParam (triggerId, "Trigger", { "TRANSPORT", "NOTE" }, 0));
+    add (choiceParam (triggerId, "Trigger", { "TRANSPORT", "NOTE" }, 1));
+    add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { holdId, 1 }, "Hold", 1, 16, 1));
     add (floatParam (reverseId, "Reverse Chance", { 0.0f, 100.0f, 0.1f }, 0.0f, percent));
     add (floatParam (scatterId, "Scatter", { 0.0f, 500.0f, 0.1f, 0.5f }, 0.0f, millis));
-    add (floatParam (fadeId, "Fade", logRange (0.5f, 50.0f, 0.01f), 3.0f, millis));
+    add (floatParam (attackId, "Attack", logRange (0.1f, 50.0f, 0.01f), 2.0f, millis));
+    add (floatParam (releaseId, "Release", logRange (1.0f, 500.0f, 0.01f), 10.0f, millis));
     add (choiceParam (snapId, "Snap", { "OFF", "TRANSIENTS", "ZERO" }, 0));
+
+    // Rafraîchissements
+    const auto refreshNames = toArray (phreak::Divisions::refreshNames());
+    add (choiceParam (refreshRateId, "Refresh Rate", refreshNames, 2));
+    add (boolParam (linkId, "Refresh Link", true));
+    static const char* laneNames[] = { "Positions", "Loops", "Reverb", "Delay" };
+    static const float laneAmounts[] = { 100.0f, 40.0f, 30.0f, 30.0f };
+    for (int l = 0; l < phreak::numLanes; ++l)
+    {
+        const juce::String n = juce::String ("Refresh ") + laneNames[l] + " ";
+        add (boolParam (laneId (l, "On"), n + "On", false));
+        add (choiceParam (laneId (l, "Rate"), n + "Rate", refreshNames, 2));
+        add (floatParam (laneId (l, "Amount"), n + (l == 0 ? "Range" : "Chance"), { 0.0f, 100.0f, 0.1f }, laneAmounts[l], percent));
+    }
+    add (boolParam (rfSamplesId, "Refresh Samples Too", false));
+    add (boolParam (rfLoopRndRateId, "Refresh Loop Rate Too", false));
 
     // Effets
     add (floatParam (revSizeId, "Reverb Size", { 0.0f, 100.0f, 0.1f }, 60.0f, percent));
@@ -158,7 +176,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout PhreakAudioProcessor::create
     add (boolParam (limiterId, "Limiter", true));
 
     // Points
-    const auto stutterNames = toArray (phreak::Divisions::stutterNames());
+    const auto loopNames = toArray (phreak::Divisions::loopNames());
     for (int p = 0; p < numPoints; ++p)
     {
         const auto n = "Point " + juce::String (p + 1) + " ";
@@ -169,7 +187,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout PhreakAudioProcessor::create
         add (floatParam (pointId (p, "Gain"), n + "Gain", { -36.0f, 12.0f, 0.01f }, 0.0f, decibels));
         add (floatParam (pointId (p, "Pan"), n + "Pan", { -100.0f, 100.0f, 1.0f }, 0.0f, panText));
         add (floatParam (pointId (p, "Filter"), n + "Filter", { -100.0f, 100.0f, 0.1f }, 0.0f, filterText));
-        add (choiceParam (pointId (p, "Stutter"), n + "Stutter", stutterNames, 0));
+        add (boolParam (pointId (p, "Loop"), n + "Loop", false));
+        add (choiceParam (pointId (p, "LoopRate"), n + "Loop Rate", loopNames, 4));
         add (floatParam (pointId (p, "Rev"), n + "Reverb Send", { 0.0f, 100.0f, 0.1f }, 0.0f, percent));
         add (floatParam (pointId (p, "Dly"), n + "Delay Send", { 0.0f, 100.0f, 0.1f }, 0.0f, percent));
         add (choiceParam (pointId (p, "Tail"), n + "Tail", { "KEEP", "CUT" }, 0));
@@ -198,7 +217,7 @@ PhreakAudioProcessor::PhreakAudioProcessor()
     {
         auto raw = [&] (const char* what) { return apvts.getRawParameterValue (pointId (p, what)); };
         pointRaw[(size_t) p] = { raw ("Sample"), raw ("Pos"), raw ("Dir"), raw ("Pitch"), raw ("Gain"), raw ("Pan"),
-                                 raw ("Filter"), raw ("Stutter"), raw ("Rev"), raw ("Dly"), raw ("Tail") };
+                                 raw ("Filter"), raw ("Loop"), raw ("LoopRate"), raw ("Rev"), raw ("Dly"), raw ("Tail") };
     }
     for (int k = 0; k < numSteps; ++k)
         stepRaw[(size_t) k] = apvts.getRawParameterValue (stepId (k));
@@ -251,7 +270,20 @@ void PhreakAudioProcessor::readParameters()
     s.trigger = juce::roundToInt (v (triggerId));
     s.reverseChance = v (reverseId) * 0.01f;
     s.scatterMs = v (scatterId);
-    s.fadeMs = v (fadeId);
+    s.attackMs = v (attackId);
+    s.releaseMs = v (releaseId);
+    s.hold = juce::roundToInt (v (holdId));
+    s.snap = juce::roundToInt (v (snapId));
+    s.refreshRate = juce::roundToInt (v (refreshRateId));
+    s.link = v (linkId) > 0.5f;
+    for (int l = 0; l < phreak::numLanes; ++l)
+    {
+        s.lanes[l].on = apvts.getRawParameterValue (laneId (l, "On"))->load() > 0.5f;
+        s.lanes[l].rate = juce::roundToInt (apvts.getRawParameterValue (laneId (l, "Rate"))->load());
+        s.lanes[l].amount = apvts.getRawParameterValue (laneId (l, "Amount"))->load() * 0.01f;
+    }
+    s.refreshSamples = v (rfSamplesId) > 0.5f;
+    s.loopRandomRate = v (rfLoopRndRateId) > 0.5f;
     s.revSize = v (revSizeId) * 0.01f;
     s.revDamp = v (revDampId) * 0.01f;
     s.revWidth = v (revWidthId) * 0.01f;
@@ -276,7 +308,8 @@ void PhreakAudioProcessor::readParameters()
         pp.gain = juce::Decibels::decibelsToGain (r.gain->load(), -100.0f);
         pp.pan = r.pan->load() * 0.01f;
         pp.filter = r.filter->load() * 0.01f;
-        pp.stutter = juce::roundToInt (r.stutter->load());
+        pp.loop = r.loop->load() > 0.5f;
+        pp.loopRate = juce::roundToInt (r.loopRate->load());
         pp.rev = r.rev->load() * 0.01f;
         pp.dly = r.dly->load() * 0.01f;
         pp.tailKeep = r.tail->load() < 0.5f;
@@ -502,8 +535,11 @@ void PhreakAudioProcessor::randomizePoints (int flags, juce::Random& rng)
             const float r = rng.nextFloat();
             setParam (pointId (p, "Dir"), r < 0.6f ? 0.0f : (r < 0.85f ? 1.0f : 2.0f));
         }
-        if ((flags & rndStutter) != 0)
-            setParam (pointId (p, "Stutter"), rng.nextFloat() < 0.5f ? 0.0f : (float) (3 + rng.nextInt (7)));
+        if ((flags & rndLoops) != 0)
+        {
+            setParam (pointId (p, "Loop"), rng.nextFloat() < 0.5f ? 1.0f : 0.0f);
+            setParam (pointId (p, "LoopRate"), (float) (2 + rng.nextInt (7)));
+        }
         if ((flags & rndPitch) != 0)
             setParam (pointId (p, "Pitch"), (float) pitches[rng.nextInt ((int) std::size (pitches))]);
         if ((flags & rndFx) != 0)

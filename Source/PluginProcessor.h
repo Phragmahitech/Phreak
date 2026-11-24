@@ -42,7 +42,19 @@ public:
     static constexpr const char* triggerId   = "trigger";
     static constexpr const char* reverseId   = "reverse";
     static constexpr const char* scatterId   = "scatter";
-    static constexpr const char* fadeId      = "fade";
+    static constexpr const char* attackId    = "attack";
+    static constexpr const char* releaseId   = "release";
+    static constexpr const char* holdId      = "hold";
+    static constexpr const char* refreshRateId = "refreshRate";
+    static constexpr const char* linkId      = "refreshLink";
+    static constexpr const char* rfSamplesId = "rfSamples";
+    static constexpr const char* rfLoopRndRateId = "rfLoopRndRate";
+    /** Voies de rafraîchissement : "rfPosOn", "rfLoopRate", "rfRevAmount"... */
+    static juce::String laneId (int lane, const char* what)
+    {
+        static const char* names[] = { "Pos", "Loop", "Rev", "Dly" };
+        return juce::String ("rf") + names[juce::jlimit (0, 3, lane)] + what;
+    }
     static constexpr const char* snapId      = "snap";
     static constexpr const char* revSizeId   = "revSize";
     static constexpr const char* revDampId   = "revDamp";
@@ -104,7 +116,7 @@ public:
     void setSampleData (int slot, std::shared_ptr<phreak::Sample> data, const juce::String& name);
 
     // Hasard et placement des points (fil de l'interface)
-    enum RandomFlags { rndPositions = 1, rndSamples = 2, rndDirections = 4, rndStutter = 8, rndPitch = 16, rndFx = 32, rndTails = 64 };
+    enum RandomFlags { rndPositions = 1, rndSamples = 2, rndDirections = 4, rndLoops = 8, rndPitch = 16, rndFx = 32, rndTails = 64 };
     void randomizePoints (int flags, juce::Random& rng);
     void randomizePoints (int flags)                        { juce::Random rng; randomizePoints (flags, rng); }
     void spreadPointsEvenly();
@@ -147,7 +159,7 @@ private:
     struct PointRaw
     {
         std::atomic<float>* sample; std::atomic<float>* pos; std::atomic<float>* dir; std::atomic<float>* pitch;
-        std::atomic<float>* gain; std::atomic<float>* pan; std::atomic<float>* filter; std::atomic<float>* stutter;
+        std::atomic<float>* gain; std::atomic<float>* pan; std::atomic<float>* filter; std::atomic<float>* loop; std::atomic<float>* loopRate;
         std::atomic<float>* rev; std::atomic<float>* dly; std::atomic<float>* tail;
     };
     std::array<PointRaw, numPoints> pointRaw {};

@@ -215,7 +215,7 @@ int main()
     {
         Rig r;
         r.e.setSample (0, &sine);
-        PointParams pp; pp.pos = 0.1f; pp.stutter = 5;
+        PointParams pp; pp.pos = 0.1f; pp.loop = true; pp.loopRate = 4;
         for (int p = 0; p < maxPoints; ++p) r.e.setPoint (p, pp);
         Settings s; s.rate = 1; r.e.setSettings (s);   // pas à la noire : 4 répétitions par pas
         r.run (24000, true);
@@ -235,7 +235,7 @@ int main()
 
         Rig q;
         q.e.setSample (0, &ramp);
-        pp.dir = pingPong; pp.stutter = 7;   // fenêtre d'une triple croche = 3000 échantillons
+        pp.dir = pingPong; pp.loop = true; pp.loopRate = 6;   // fenêtre d'une triple croche = 3000 échantillons
         for (int p = 0; p < maxPoints; ++p) q.e.setPoint (p, pp);
         q.run (6000, true);
         float lo = 1.0f, hi = 0.0f;
@@ -276,7 +276,7 @@ int main()
     {
         Rig r;
         r.e.setSample (0, &sine);
-        Settings s; s.gate = 0.5f; s.fadeMs = 1.0f; r.e.setSettings (s);
+        Settings s; s.gate = 0.5f; s.attackMs = 1.0f; s.releaseMs = 1.0f; r.e.setSettings (s);
         r.run (12000, true);
         CHECK (r.energy (3200, 5900) == 0.0 && r.energy (500, 2900) > 10.0, "gate");
 
@@ -314,13 +314,133 @@ int main()
         for (int p = 0; p < maxPoints; ++p)
         {
             PointParams pp; pp.slot = p % 3; pp.pos = p / 15.0f; pp.dir = p % 3; pp.pitch = (float) (p * 6 - 48); pp.gain = 4.0f; pp.filter = (p % 5 - 2) / 2.0f;
-            pp.stutter = p % 11; pp.rev = 1.0f; pp.dly = 1.0f; pp.tailKeep = p % 2 == 0;
+            pp.loop = p % 3 == 0; pp.loopRate = p % 10; pp.rev = 1.0f; pp.dly = 1.0f; pp.tailKeep = p % 2 == 0;
             r.e.setPoint (p, pp);
         }
         r.run (480000, true, 333);
         bool finite = true; float peak = 0.0f;
         for (auto v : r.L) { finite &= std::isfinite (v); peak = std::max (peak, std::abs (v)); }
         CHECK (finite && peak <= 1.0f && peak > 0.1f, "peak %g", peak);
+    }
+
+    // 16. Mode NOTE avec Ableton qui joue : calé sur la grille
+    {
+        Rig r;
+        r.e.setSample (0, &sine);
+        Settings s; s.trigger = triggerNote; r.e.setSettings (s);
+        r.run (36000, true, 512, 120.0, { { 7000, true, 60, 1.0f }, { 30000, false, 60, 0.0f } });
+        CHECK (r.log.size() == 4 && r.log[0].time == 7000 && r.log[0].step == 1 && r.log[1].time == 12000 && r.log[3].time == 24000,
+               "note grille %d %lld", (int) r.log.size(), r.log.size() > 1 ? (long long) r.log[1].time : -1LL);
+        CHECK (r.energy (31000, 36000) == 0.0, "note relachee");
+        Rig q;
+        q.e.setSample (0, &sine);
+        q.e.setSettings (s);
+        q.run (13000, true, 512, 120.0, { { 12000, true, 60, 1.0f } });
+        CHECK (q.log.size() == 1 && q.log[0].time == 12000 && q.log[0].step == 2, "note pile sur un pas : une fois (%d)", (int) q.log.size());
+    }
+
+    // 17. REFRESH des positions : fixe dans un cycle, change au suivant ; LINK
+    {
+        Engine e;
+        e.prepare (SR, 512);
+        e.setSample (0, &sine);
+        Settings s; s.lanes[lanePos].on = true; s.link = false; s.lanes[lanePos].rate = 2;   // 4 temps
+        e.setSettings (s);
+        const auto a = e.effective (3, 0.0), b = e.effective (3, 3.99), c = e.effective (3, 4.0), d = e.effective (3, 8.0);
+        CHECK (a.pos == b.pos && a.pos != c.pos && c.pos != d.pos, "refresh pos %g %g %g", a.pos, c.pos, d.pos);
+        CHECK (e.effective (3, 4.0).pos != e.effective (4, 4.0).pos, "points differents");
+        s.link = true; s.refreshRate = 0; e.setSettings (s);   // tout suit 1 temps
+        CHECK (e.effective (3, 0.0).pos != e.effective (3, 1.0).pos, "link");
+        s.lanes[lanePos].amount = 0.1f; s.refreshRate = 2; e.setSettings (s);
+        PointParams pp; pp.pos = 0.5f; e.setPoint (3, pp);
+        bool near = true;
+        for (int c2 = 0; c2 < 50; ++c2) near &= std::abs (e.effective (3, c2 * 4.0).pos - 0.5f) <= 0.0501f;
+        CHECK (near, "amount 10 %% autour de la position");
+    }
+
+    // 18. REFRESH des loops / reverb / delay
+    {
+        Engine e;
+        e.prepare (SR, 512);
+        e.setSample (0, &sine);
+        Settings s; s.lanes[laneLoop].on = true; s.lanes[laneLoop].amount = 0.0f;
+        s.lanes[laneRev].on = true; s.lanes[laneRev].amount = 1.0f;
+        s.lanes[laneDly].on = true; s.lanes[laneDly].amount = 0.5f;
+        e.setSettings (s);
+        bool noLoop = true, allRev = true; int dlyOn = 0;
+        for (int c = 0; c < 64; ++c)
+            for (int p = 0; p < 16; ++p)
+            {
+                const auto x = e.effective (p, c * 4.0);
+                noLoop &= ! x.loop;
+                allRev &= std::abs (x.rev - 0.5f) < 1e-6f;
+                dlyOn += x.dly > 0.0f ? 1 : 0;
+            }
+        CHECK (noLoop && allRev, "loop 0 %%, reverb 100 %%");
+        CHECK (dlyOn > 400 && dlyOn < 620, "delay 50 %% : %d / 1024", dlyOn);
+        s.lanes[laneLoop].amount = 1.0f; s.loopRandomRate = true; e.setSettings (s);
+        bool allLoop = true, rateVaries = false;
+        for (int p = 0; p < 16; ++p) { const auto x = e.effective (p, 0.0); allLoop &= x.loop; rateVaries |= x.loopRate != e.effective (0, 0.0).loopRate; }
+        CHECK (allLoop && rateVaries, "loops 100 %% et vitesse tiree");
+
+        // le loop tiré s'entend : le son se répète
+        Rig r;
+        r.e.setSample (0, &sine);
+        s = Settings(); s.rate = 1; s.lanes[laneLoop].on = true; s.lanes[laneLoop].amount = 1.0f;
+        r.e.setSettings (s);
+        for (int p = 0; p < maxPoints; ++p) { PointParams pp; pp.pos = 0.1f; pp.loopRate = 4; r.e.setPoint (p, pp); }
+        r.run (24000, true);
+        double diff = 0.0, ref = 0.0;
+        for (int i = 1000; i < 5000; ++i) { diff += std::abs (r.L[(size_t) i] - r.L[(size_t) i + 6000]); ref += std::abs (r.L[(size_t) i]); }
+        CHECK (diff < ref * 1.0e-3 && ref > 10.0, "loop tire");
+    }
+
+    // 19. Ordres de passage
+    {
+        auto order = [&] (int mode, int n, int hold, int steps, std::uint32_t seed = 1)
+        {
+            Rig r;
+            r.e.setSample (0, &sine);
+            Settings s; s.mode = mode; s.numPoints = n; s.hold = hold; s.steps = 64; s.lock = false; s.seed = seed;
+            r.e.setSettings (s);
+            r.run (steps * 6000, true);
+            std::vector<int> pts;
+            for (auto& t : r.log) pts.push_back (t.point);
+            return pts;
+        };
+        CHECK ((order (modeUpDown, 4, 1, 8) == std::vector<int> { 0, 1, 2, 3, 2, 1, 0, 1 }), "up-down");
+        CHECK ((order (modeDown, 4, 1, 5) == std::vector<int> { 3, 2, 1, 0, 3 }), "down");
+        CHECK ((order (modeUp, 4, 2, 8) == std::vector<int> { 0, 1, 2, 3 }), "hold 2");
+        const auto sh = order (modeShuffle, 8, 1, 24);
+        bool eachOnce = sh.size() == 24;
+        for (int c = 0; c < 3 && eachOnce; ++c)
+        {
+            bool seen[8] {};
+            for (int i = 0; i < 8; ++i) { if (seen[sh[(size_t) (c * 8 + i)]]) eachOnce = false; seen[sh[(size_t) (c * 8 + i)]] = true; }
+        }
+        CHECK (eachOnce, "shuffle : chaque point une fois par tour");
+        CHECK (! std::equal (sh.begin(), sh.begin() + 8, sh.begin() + 8), "shuffle change d'un tour a l'autre");
+        const auto dr = order (modeDrunk, 8, 1, 40);
+        bool steps1 = dr.size() == 40, moved = false;
+        for (size_t i = 1; i < dr.size(); ++i)
+        {
+            const int d = (dr[i] - dr[i - 1] + 8) % 8;
+            steps1 &= d == 0 || d == 1 || d == 7;
+            moved |= d != 0;
+        }
+        CHECK (steps1 && moved, "drunk");
+    }
+
+    // 20. ATTACK : montée progressive
+    {
+        Rig r;
+        r.e.setSample (0, &sine);
+        Settings s; s.attackMs = 20.0f; r.e.setSettings (s);
+        r.run (3000, true);
+        float early = 0.0f, late = 0.0f;
+        for (int i = 0; i < 100; ++i) early = std::max (early, std::abs (r.L[(size_t) i]));
+        for (int i = 1000; i < 1300; ++i) late = std::max (late, std::abs (r.L[(size_t) i]));
+        CHECK (early < 0.15f * late && late > 0.3f, "attack %g %g", early, late);
     }
 
     std::printf ("%d verifications, %d echecs\n", checks, failures);

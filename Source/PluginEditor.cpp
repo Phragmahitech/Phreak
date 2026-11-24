@@ -390,6 +390,30 @@ void WaveView::paint (juce::Graphics& g)
                 g.fillRect (x, r.getBottom() - 6.0f, 1.0f, 6.0f);
         }
 
+        // positions rafraîchies : drapeaux pleins là où les points jouent ; positions réglées en traits fins
+        const bool refreshing = processor.getParam (P::laneId (phreak::lanePos, "On")) > 0.5f;
+        const auto& eng = processor.getEngine();
+        if (refreshing)
+        {
+            for (int p = 0; p < P::numPoints; ++p)
+            {
+                if (eng.effSlot[(size_t) p].load() != slot) continue;
+                const float x = xForPos (eng.effPos[(size_t) p].load());
+                if (x < r.getX() - 20.0f || x > r.getRight() + 2.0f) continue;
+                const bool on = p < juce::roundToInt (processor.getParam (P::pointsId));
+                auto c = L::pointColour (p).withAlpha (on ? 1.0f : 0.3f);
+                if (p == playPoint && playPos >= 0.0f) c = c.brighter (0.4f);
+                g.setColour (c.withAlpha (on ? 0.8f : 0.25f));
+                g.fillRect (x - 0.5f, r.getY() + 16.0f, 1.0f, r.getHeight() - 32.0f);
+                auto flag = juce::Rectangle<float> (x, r.getBottom() - 16.0f, 20.0f, 15.0f);
+                g.setColour (c);
+                g.fillRect (flag);
+                g.setColour (juce::Colour (0xff0b1216));
+                g.setFont (lf.font (10.5f, true));
+                g.drawText (juce::String (p + 1), flag, juce::Justification::centred, false);
+            }
+        }
+
         // points
         const int active = juce::roundToInt (processor.getParam (P::pointsId));
         for (int pass = 0; pass < 2; ++pass)
@@ -401,8 +425,12 @@ void WaveView::paint (juce::Graphics& g)
                 const bool on = p < active;
                 auto c = L::pointColour (p).withAlpha (on ? 1.0f : 0.35f);
                 if (p == playPoint && playPos >= 0.0f) c = c.brighter (0.4f);
-                g.setColour (c.withAlpha (p == selected ? 0.95f : (on ? 0.7f : 0.3f)));
-                g.fillRect (x - (p == selected ? 1.0f : 0.5f), r.getY(), p == selected ? 2.0f : 1.0f, r.getHeight());
+                g.setColour (c.withAlpha (refreshing ? 0.25f : (p == selected ? 0.95f : (on ? 0.7f : 0.3f))));
+                if (refreshing)
+                    for (float yy = r.getY(); yy < r.getBottom(); yy += 6.0f)
+                        g.fillRect (x - 0.5f, yy, 1.0f, 3.0f);
+                else
+                    g.fillRect (x - (p == selected ? 1.0f : 0.5f), r.getY(), p == selected ? 2.0f : 1.0f, r.getHeight());
                 auto flag = juce::Rectangle<float> (x, r.getY(), 20.0f, 15.0f);
                 g.setColour (c);
                 g.fillRect (flag);
@@ -433,12 +461,19 @@ void WaveView::paint (juce::Graphics& g)
         g.setFont (lf.font (10.5f, true, 0.08f));
         g.setColour (L::dim());
         auto info = r.reduced (8.0f, 4.0f).removeFromBottom (14.0f);
+        if (refreshing)
+        {
+            g.setColour (L::lilac());
+            g.drawText ("REFRESH : BOTTOM FLAGS = PLAYING NOW",
+                        r.reduced (8.0f, 4.0f).withHeight (14.0f).translated (0.0f, 16.0f), juce::Justification::centred, false);
+            g.setColour (L::dim());
+        }
         g.drawText (timeText (viewStart * s.seconds()) + "  -  " + timeText ((viewStart + viewLength) * s.seconds())
                         + (viewLength < 0.999 ? "     ZOOM x" + juce::String (1.0 / viewLength, 1) : juce::String()),
-                    info.translated (0.0f, -8.0f), juce::Justification::bottomLeft, false);
+                    info.withY (r.getY() + 20.0f), juce::Justification::centredLeft, false);
         g.drawText (s.name + "   " + timeText (s.seconds()) + "   " + juce::String (s.data->sampleRate / 1000.0, 1) + " kHz   "
                         + juce::String ((int) s.data->onsets.size()) + " transients",
-                    info.translated (0.0f, -8.0f), juce::Justification::bottomRight, false);
+                    info.withY (r.getY() + 20.0f), juce::Justification::centredRight, false);
 
         if (hover >= 0 && dragging < 0)
         {
@@ -598,10 +633,13 @@ void WaveView::timerCallback()
         cacheValid = false;
         repaint();
     }
-    if (pos != playPos || point != playPoint || isMouseButtonDown())
+    float effSum = 0.0f;
+    for (auto& e : eng.effPos) effSum += e.load();
+    if (pos != playPos || point != playPoint || isMouseButtonDown() || std::abs (effSum - lastEffSum) > 1.0e-6f)
     {
         playPos = pos;
         playPoint = point;
+        lastEffSum = effSum;
         repaint();
     }
 }
@@ -702,8 +740,8 @@ void StepGrid::paint (juce::Graphics& g)
         g.setColour (L::text());
         g.setFont (lf.font (13.0f, true, 0.14f));
         g.drawText (juce::roundToInt (processor.getParam (P::modeId)) == phreak::modeCycle
-                        ? "CYCLE : POINTS 1 > N IN ORDER  -  GRID NOT USED"
-                        : "RANDOM : SEEDED RANDOM POINT EACH STEP  -  GRID NOT USED",
+                        ? "ORDER UP : POINTS 1 > N  -  GRID NOT USED"
+                        : "ORDER " + processor.apvts.getParameter (P::modeId)->getCurrentValueAsText().toUpperCase() + " : POINTS 1 > " + juce::String (juce::roundToInt (processor.getParam (P::pointsId))) + "  -  GRID NOT USED",
                     getLocalBounds(), juce::Justification::centred, false);
     }
 }
@@ -789,6 +827,7 @@ namespace
     const juce::Rectangle<int> randomPanel  { 786, 354, 480, 234 };
     const juce::Rectangle<int> seqPanel     { 14, 598, 900, 250 };
     const juce::Rectangle<int> fxPanel      { 926, 598, 340, 250 };
+    const juce::Rectangle<int> refreshPanel { 14, 858, 1252, 92 };
 
     juce::StringArray choicesOf (juce::RangedAudioParameter* p)
     {
@@ -884,10 +923,10 @@ PhreakFacade::PhreakFacade (PhreakAudioProcessor& p)
 
     // --- Séquenceur ---
     const int sx = seqPanel.getX(), sy = seqPanel.getY();
-    choiceSwitch (modeSwitch, P::modeId, { "GRID", "CYCLE", "RANDOM" }, { sx + 150, sy + 30, 210, 24 });
-    choiceSwitch (triggerSwitch, P::triggerId, { "TRANSPORT", "NOTE" }, { sx + 376, sy + 30, 190, 24 });
-    choiceMenu (rateMenu, P::rateId, { sx + 582, sy + 30, 72, 24 }, "rate");
-    toggle (syncButton, P::syncId, { sx + 660, sy + 30, 64, 24 });
+    choiceMenu (orderMenu, P::modeId, { sx + 150, sy + 30, 110, 24 }, "order");
+    choiceSwitch (triggerSwitch, P::triggerId, { "TRANSPORT", "NOTE" }, { sx + 276, sy + 30, 190, 24 });
+    choiceMenu (rateMenu, P::rateId, { sx + 482, sy + 30, 72, 24 }, "rate");
+    toggle (syncButton, P::syncId, { sx + 560, sy + 30, 64, 24 });
     patternButton.setBounds (sx + 776, sy + 30, 110, 24);
     patternButton.onClick = [this] { showPatternMenu(); };
     addAndMakeVisible (patternButton);
@@ -896,12 +935,33 @@ PhreakFacade::PhreakFacade (PhreakAudioProcessor& p)
     grid.setBounds (sx + 12, sy + 64, seqPanel.getWidth() - 24, 82);
     grid.selectedPoint = [this] { return selectedPoint; };
 
-    knob (stepsKnob, P::stepsId, { sx + 14, sy + 152, 96, 94 }, "STEPS");
-    knob (freeKnob, P::freeMsId, { sx + 110, sy + 152, 96, 94 }, "FREE TIME");
-    knob (driftKnob, P::driftId, { sx + 206, sy + 152, 96, 94 }, "DRIFT");
-    knob (swingKnob, P::swingId, { sx + 302, sy + 152, 96, 94 }, "SWING");
-    knob (gateKnob, P::gateId, { sx + 398, sy + 152, 96, 94 }, "GATE");
-    knob (fadeKnob, P::fadeId, { sx + 494, sy + 152, 96, 94 }, "FADE");
+    knob (stepsKnob, P::stepsId, { sx + 10, sy + 152, 72, 94 }, "STEPS");
+    knob (holdKnob, P::holdId, { sx + 82, sy + 152, 72, 94 }, "HOLD");
+    knob (freeKnob, P::freeMsId, { sx + 154, sy + 152, 72, 94 }, "FREE TIME");
+    knob (driftKnob, P::driftId, { sx + 226, sy + 152, 72, 94 }, "DRIFT");
+    knob (swingKnob, P::swingId, { sx + 298, sy + 152, 72, 94 }, "SWING");
+    knob (gateKnob, P::gateId, { sx + 370, sy + 152, 72, 94 }, "GATE");
+    knob (attackKnob, P::attackId, { sx + 442, sy + 152, 72, 94 }, "ATTACK");
+    knob (releaseKnob, P::releaseId, { sx + 514, sy + 152, 72, 94 }, "RELEASE");
+
+    // --- Rafraîchissements ---
+    {
+        const int qx = refreshPanel.getX(), qy = refreshPanel.getY();
+        choiceMenu (refreshRateMenu, P::refreshRateId, { qx + 112, qy + 30, 110, 24 }, "refreshRate");
+        toggle (linkButton, P::linkId, { qx + 112, qy + 60, 110, 22 });
+        static const char* laneNames[] = { "POSITIONS", "LOOPS", "REVERB", "DELAY" };
+        static const char* amountNames[] = { "RANGE", "CHANCE", "CHANCE", "CHANCE" };
+        for (int l = 0; l < 4; ++l)
+        {
+            const int bx = qx + 246 + l * 251;
+            laneButtons[l].setButtonText (laneNames[l]);
+            toggle (laneButtons[l], P::laneId (l, "On"), { bx, qy + 30, 96, 24 });
+            choiceMenu (laneRateMenus[l], P::laneId (l, "Rate"), { bx, qy + 60, 96, 22 }, P::laneId (l, "Rate"));
+            knob (laneKnobs[l], P::laneId (l, "Amount"), { bx + 98, qy + 4, 70, 86 }, amountNames[l]);
+        }
+        toggle (samplesButton, P::rfSamplesId, { qx + 246 + 170, qy + 30, 76, 24 });
+        toggle (loopRateButton, P::rfLoopRndRateId, { qx + 246 + 251 + 170, qy + 30, 76, 24 });
+    }
 
     // --- Effets ---
     const int fx = fxPanel.getX(), fy = fxPanel.getY();
@@ -1027,8 +1087,17 @@ void PhreakFacade::bindPointControls()
     const int px = pointPanel.getX(), py = pointPanel.getY();
     choiceSwitch (pointSampleSwitch, P::pointId (p, "Sample"), { "1", "2", "3", "4" }, { px + 14, py + 58, 136, 26 });
     choiceSwitch (dirSwitch, P::pointId (p, "Dir"), { "FWD", "REV", "PING" }, { px + 166, py + 58, 186, 26 });
-    choiceMenu (stutterMenu, P::pointId (p, "Stutter"), { px + 368, py + 58, 100, 26 }, "stutter");
-    choiceSwitch (tailSwitch, P::pointId (p, "Tail"), { "KEEP", "CUT" }, { px + 484, py + 58, 130, 26 });
+    loopA.reset();
+    if (loopButton.getParentComponent() == nullptr)
+    {
+        loopButton.setClickingTogglesState (true);
+        loopButton.setComponentID ("pointLoop");
+        loopButton.setBounds (px + 368, py + 58, 60, 26);
+        addAndMakeVisible (loopButton);
+    }
+    loopA = std::make_unique<APVTS::ButtonAttachment> (audioProcessor.apvts, P::pointId (p, "Loop"), loopButton);
+    choiceMenu (loopRateMenu, P::pointId (p, "LoopRate"), { px + 432, py + 58, 80, 26 }, "loopRate");
+    choiceSwitch (tailSwitch, P::pointId (p, "Tail"), { "KEEP", "CUT" }, { px + 528, py + 58, 130, 26 });
 
     for (auto* s : { &posKnob, &pitchKnob, &gainKnob, &panKnob, &filterKnob, &revKnob, &dlyKnob })
         s->getProperties().set ("colour", (juce::int64) L::pointColour (p).getARGB());
@@ -1092,7 +1161,7 @@ void PhreakFacade::showRandomMenu()
     m.addSectionHeader ("RANDOMIZE POINTS 1 > " + juce::String (juce::roundToInt (audioProcessor.getParam (P::pointsId))));
     m.addItem (1, "Positions");
     m.addItem (2, "Positions + samples");
-    m.addItem (3, "Positions + direction + stutter");
+    m.addItem (3, "Positions + direction + loops");
     m.addItem (4, "Everything (+ pitch, FX, pan, tails)");
     m.addItem (5, "Only FX / pan / filter");
     m.addSeparator();
@@ -1106,8 +1175,8 @@ void PhreakFacade::showRandomMenu()
         {
             case 1: ap.randomizePoints (P::rndPositions); break;
             case 2: ap.randomizePoints (P::rndPositions | P::rndSamples); break;
-            case 3: ap.randomizePoints (P::rndPositions | P::rndDirections | P::rndStutter); break;
-            case 4: ap.randomizePoints (P::rndPositions | P::rndSamples | P::rndDirections | P::rndStutter | P::rndPitch | P::rndFx | P::rndTails); break;
+            case 3: ap.randomizePoints (P::rndPositions | P::rndDirections | P::rndLoops); break;
+            case 4: ap.randomizePoints (P::rndPositions | P::rndSamples | P::rndDirections | P::rndLoops | P::rndPitch | P::rndFx | P::rndTails); break;
             case 5: ap.randomizePoints (P::rndFx | P::rndTails); break;
             case 6: ap.randomizePattern(); break;
             default: break;
@@ -1171,6 +1240,11 @@ void PhreakFacade::timerCallback()
             showSlot (slotOfPoint);
     }
 
+    const bool linked = audioProcessor.getParam (P::linkId) > 0.5f;
+    for (auto& m : laneRateMenus)
+        m.button.setEnabled (! linked);
+    repaint (pointPanel.getX(), pointPanel.getY() + 28, pointPanel.getWidth(), 10);
+
     const float peak = audioProcessor.takeOutputPeak();
     const float db = juce::Decibels::gainToDecibels (peak, -60.0f);
     outLevel = db > outLevel ? db : juce::jmax (-60.0f, outLevel - 1.5f);
@@ -1193,8 +1267,8 @@ void PhreakFacade::paint (juce::Graphics& g)
     g.drawText ("GLITCH SAMPLE SEQUENCER  |  PHRAGMA", 196, 10, 400, 36, juce::Justification::centredLeft, false);
 
     g.setFont (lookAndFeel.font (9.5f, true, 0.14f));
-    g.drawText ("MIDI   C1 > D#2 = POINTS 1 > 16", 540, 12, 310, 14, juce::Justification::centredLeft, false);
-    g.drawText ("OTHER NOTES = TRANSPOSE (C3 = 0)", 540, 28, 310, 14, juce::Justification::centredLeft, false);
+    g.drawText ("NOTE MODE : 1 LONG NOTE = ENDLESS SEQUENCE", 540, 12, 320, 14, juce::Justification::centredLeft, false);
+    g.drawText ("C1 > D#2 = POINTS   OTHER NOTES = TRANSPOSE", 540, 28, 320, 14, juce::Justification::centredLeft, false);
 
     const auto panelFont = lookAndFeel.font (12.0f, true, 0.2f);
     L::drawPanel (g, samplePanel.toFloat(), "SAMPLES", panelFont);
@@ -1202,6 +1276,7 @@ void PhreakFacade::paint (juce::Graphics& g)
     L::drawPanel (g, randomPanel.toFloat(), "RANDOM", panelFont);
     L::drawPanel (g, seqPanel.toFloat(), "SEQUENCER", panelFont);
     L::drawPanel (g, fxPanel.toFloat(), "REVERB", panelFont);
+    L::drawPanel (g, refreshPanel.toFloat(), "REFRESH", panelFont);
 
     // Petites étiquettes
     g.setFont (lookAndFeel.font (9.5f, true, 0.18f));
@@ -1213,16 +1288,18 @@ void PhreakFacade::paint (juce::Graphics& g)
     const int px = pointPanel.getX(), py = pointPanel.getY();
     label ("SAMPLE", px + 14, py + 42);
     label ("DIRECTION", px + 166, py + 42);
-    label ("STUTTER", px + 368, py + 42);
-    label ("FX TAIL", px + 484, py + 42);
+    label ("LOOP (BEFORE FX)", px + 368, py + 42, 150);
+    label ("FX TAIL", px + 528, py + 42);
 
 
     label ("SNAP", randomPanel.getX() + 18, randomPanel.getY() + 196);
-    label ("MODE", seqPanel.getX() + 150, seqPanel.getY() + 14);
-    label ("PLAY WITH", seqPanel.getX() + 376, seqPanel.getY() + 14);
-    label ("RATE", seqPanel.getX() + 582, seqPanel.getY() + 14);
+    label ("ORDER", seqPanel.getX() + 150, seqPanel.getY() + 14);
+    label ("PLAY WITH", seqPanel.getX() + 276, seqPanel.getY() + 14);
+    label ("RATE (SPEED)", seqPanel.getX() + 482, seqPanel.getY() + 14);
+    label ("EVERY", refreshPanel.getX() + 112, refreshPanel.getY() + 14);
+    g.drawFittedText ("RE-ROLL ON THE GRID OF THE TRACK", refreshPanel.getX() + 14, refreshPanel.getY() + 34, 92, 48, juce::Justification::topLeft, 3, 1.0f);
     g.drawFittedText ("GRID :  CLICK = SELECTED POINT\nALT = TIE (-)    SHIFT = REST (x)\nDRAG = CHANGE    RIGHT-CLICK = MENU",
-                      seqPanel.getX() + 606, seqPanel.getY() + 172, 290, 56, juce::Justification::topLeft, 3, 1.0f);
+                      seqPanel.getX() + 600, seqPanel.getY() + 172, 296, 56, juce::Justification::topLeft, 3, 1.0f);
 
     g.setFont (lookAndFeel.font (12.0f, true, 0.2f));
     g.setColour (L::lilac());
@@ -1235,6 +1312,24 @@ void PhreakFacade::paint (juce::Graphics& g)
     const float lvl = juce::jlimit (0.0f, 1.0f, (outLevel + 60.0f) / 60.0f);
     g.setColour (outLevel > -0.5f ? juce::Colour (0xffff5a6e) : L::accent());
     g.fillRect (meter.withTop (meter.getBottom() - meter.getHeight() * lvl));
+}
+
+void PhreakFacade::paintOverChildren (juce::Graphics& g)
+{
+    // sous chaque point : L = loop, R = reverb, D = delay (ce qu'il joue en ce moment, rafraîchissements compris)
+    const auto& eng = audioProcessor.getEngine();
+    const juce::Colour colours[] = { L::accent(), L::mauve(), L::lilac() };
+    for (int i = 0; i < 16; ++i)
+    {
+        const int flags = eng.effFlags[(size_t) i].load();
+        const auto chip = pointChips[i].getBounds();
+        for (int b = 0; b < 3; ++b)
+        {
+            auto dot = juce::Rectangle<float> ((float) chip.getX() + 4.0f + b * 11.0f, (float) chip.getBottom() + 2.0f, 8.0f, 3.0f);
+            g.setColour ((flags & (1 << b)) != 0 ? colours[b] : L::edge().withAlpha (0.5f));
+            g.fillRect (dot);
+        }
+    }
 }
 
 juce::Component* PhreakFacade::findControl (const juce::String& componentId)

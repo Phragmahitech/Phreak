@@ -6,8 +6,20 @@
     Un ou plusieurs samples (jusqu'à 4), 16 points de départ posés dessus.
     Un séquenceur de pas choisit quel point joue à chaque pas (GRID / CYCLE / RANDOM),
     calé sur le transport de l'hôte (SYNC) ou en temps libre (ms, avec DRIFT).
-    Chaque point a son sens de lecture, son pitch (vitesse, façon bande), son stutter
-    (retrigger interne), son filtre, son pan, et ses envois vers la reverb et le delay.
+    Chaque point a son sens de lecture, son pitch (vitesse, façon bande), son LOOP
+    (relance calée sur le tempo, avant les effets), son filtre, son pan, et ses envois
+    vers la reverb et le delay.
+
+    Ordre de passage d'un point à l'autre : GRID (grille), UP, DOWN, UP-DOWN, RANDOM,
+    SHUFFLE (tous les points une fois par tour, ordre tiré), DRUNK (pas de ±1) ;
+    HOLD = nombre de pas avant de passer au point suivant.
+
+    Rafraîchissements (REFRESH) : tous les N temps, calés sur la grille de l'hôte, on tire
+    à nouveau les positions des points, quels points bouclent, lesquels envoient dans la
+    reverb, lesquels dans le delay. Un rythme commun (LINK) ou un par voie.
+
+    Mode NOTE : une note longue fait tourner la séquence ; quand l'hôte joue, les pas
+    restent calés sur sa grille (la note démarre sur le pas où elle tombe).
 
     TAIL par point : KEEP = la queue des effets continue après le changement de point ;
     CUT = quand on quitte ce point, les effets s'éteignent en ~6 ms (on bascule sur
@@ -47,14 +59,26 @@ struct Sample
 /** Divisions en noires. */
 struct Divisions
 {
-    static const std::vector<double>& stutter()
+    /** LOOP par point (sans OFF). */
+    static const std::vector<double>& loop()
     {
-        static const std::vector<double> d { 0.0, 2.0, 1.0, 0.5, 1.0 / 3.0, 0.25, 1.0 / 6.0, 0.125, 1.0 / 12.0, 0.0625, 0.03125 };
+        static const std::vector<double> d { 2.0, 1.0, 0.5, 1.0 / 3.0, 0.25, 1.0 / 6.0, 0.125, 1.0 / 12.0, 0.0625, 0.03125 };
         return d;
     }
-    static const std::vector<const char*>& stutterNames()
+    static const std::vector<const char*>& loopNames()
     {
-        static const std::vector<const char*> n { "OFF", "1/2", "1/4", "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/32T", "1/64", "1/128" };
+        static const std::vector<const char*> n { "1/2", "1/4", "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/32T", "1/64", "1/128" };
+        return n;
+    }
+    /** Rafraîchissements, en temps (noires). */
+    static const std::vector<double>& refresh()
+    {
+        static const std::vector<double> d { 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0 };
+        return d;
+    }
+    static const std::vector<const char*>& refreshNames()
+    {
+        static const std::vector<const char*> n { "1 BEAT", "2 BEATS", "4 BEATS", "8 BEATS", "16 BEATS", "32 BEATS", "64 BEATS" };
         return n;
     }
     static const std::vector<double>& rate()
@@ -80,7 +104,10 @@ struct Divisions
 };
 
 enum Direction { forward = 0, reverse = 1, pingPong = 2 };
-enum Mode { modeGrid = 0, modeCycle = 1, modeRandom = 2 };
+enum Mode { modeGrid = 0, modeUp, modeDown, modeUpDown, modeRandom, modeShuffle, modeDrunk, numModes };
+constexpr int modeCycle = modeUp;
+enum Lane { lanePos = 0, laneLoop, laneRev, laneDly, numLanes };
+enum Snap { snapOff = 0, snapOnsets, snapZero };
 enum Trigger { triggerTransport = 0, triggerNote = 1 };
 
 struct PointParams
@@ -92,7 +119,8 @@ struct PointParams
     float gain = 1.0f;       // linéaire
     float pan = 0.0f;        // -1..1
     float filter = 0.0f;     // -1 (passe-bas) .. 0 (rien) .. +1 (passe-haut)
-    int stutter = 0;         // index dans Divisions::stutter (0 = OFF)
+    bool loop = false;       // LOOP : relance le point en boucle
+    int loopRate = 4;        // index dans Divisions::loop (1/16)
     float rev = 0.0f, dly = 0.0f;   // envois 0..1
     bool tailKeep = true;
 };
@@ -114,7 +142,18 @@ struct Settings
     int trigger = triggerTransport;
     float reverseChance = 0.0f;
     float scatterMs = 0.0f;
-    float fadeMs = 3.0f;
+    float attackMs = 2.0f;
+    float releaseMs = 10.0f;
+    int hold = 1;               // nombre de pas avant de passer au point suivant
+    int snap = snapOff;         // pour les positions rafraîchies
+
+    // Rafraîchissements (re-tirage au hasard tous les N temps, calés sur la grille)
+    struct LaneSettings { bool on = false; int rate = 2; float amount = 1.0f; };
+    int refreshRate = 2;        // index dans Divisions::refresh (4 temps)
+    bool link = true;           // tous les rafraîchissements suivent refreshRate
+    LaneSettings lanes[numLanes] { { false, 2, 1.0f }, { false, 2, 0.4f }, { false, 2, 0.3f }, { false, 2, 0.3f } };
+    bool refreshSamples = false;   // POSITIONS : tire aussi le sample parmi ceux chargés
+    bool loopRandomRate = false;   // LOOPS : tire aussi la vitesse du loop
 
     float revSize = 0.6f, revDamp = 0.4f, revWidth = 1.0f, revLevel = 0.8f;
     int dlyDiv = 5;             // 1/8T
@@ -145,6 +184,17 @@ struct TriggerInfo
     std::int64_t time;
     int point;      // -1 = REST
     int step;
+};
+
+/** Ce qu'un point joue vraiment au moment où il est déclenché (après les rafraîchissements). */
+struct Effective
+{
+    float pos = 0.0f;
+    int slot = 0;
+    bool loop = false;
+    int loopRate = 4;
+    float rev = 0.0f, dly = 0.0f;
+    bool revLane = false, dlyLane = false;
 };
 
 //==============================================================================
@@ -316,6 +366,7 @@ public:
         stepEvents.reserve (4200);
         seqNotes.reserve (128);
         pointNotes.reserve (128);
+        for (int p = 0; p < maxPoints; ++p) { effPos[(size_t) p].store (-1.0f); effSlot[(size_t) p].store (0); effFlags[(size_t) p].store (0); }
     }
 
     void prepare (double sampleRate, int /*maxBlock*/)
@@ -333,20 +384,27 @@ public:
         activeFx = 0;
         fx[0].state = FxUnit::active;
         fx[0].fade = 1.0f;
-        wasPlaying = false;
+        wasPlaying = wasGridLocked = false;
         transportStep = 0;
         expectedPpq = -1.0e9;
         clockRunning = false;
         clockCountdown = 0.0;
         clockStep = 0;
+        clockBeat = 0.0;
+        lastBeat = 0.0;
         seqNotes.clear();
         pointNotes.clear();
         transpose = 0;
         sampleClock = 0;
+        lastStepK = INT64_MIN;
+        lastStepTime = -1;
+        drunkPos = 0;
+        drunkSeq = INT64_MIN;
         outGainNow = settings.outGain;
         displayStep.store (-1);
         displayPoint.store (-1);
         displayPos.store (-1.0f);
+        refreshDisplay (0.0);
     }
 
     //==========================================================================
@@ -363,6 +421,9 @@ public:
     // Affichage (lus par l'interface)
     std::atomic<int> displayStep { -1 }, displayPoint { -1 }, displaySlot { -1 };
     std::atomic<float> displayPos { -1.0f };
+    /** Ce que chaque point joue en ce moment (après rafraîchissement) : position, sample, bits 1 LOOP / 2 REVERB / 4 DELAY. */
+    std::array<std::atomic<float>, maxPoints> effPos;
+    std::array<std::atomic<int>, maxPoints> effSlot, effFlags;
 
     //==========================================================================
     void process (float* outL, float* outR, int n, const Transport& t, const MidiEvent* events, int numEvents)
@@ -377,71 +438,72 @@ public:
             if (v.active)
                 updateVoice (v);
 
-        // --- Pas calés sur le transport (SYNC) : calculés d'avance pour ce bloc ---
         stepEvents.clear();
         const bool transportMode = settings.trigger == triggerTransport;
-        const bool running = transportMode && t.playing;
+        const bool playing = t.playing;
+        const bool jump = playing && (! wasPlaying || std::abs (t.ppq - expectedPpq) > 8.0 / spq);
+        gridLocked = settings.sync && playing;
+        blockPpq = t.ppq;
 
-        if (transportMode)
+        if (gridLocked)
         {
-            if (running)
+            // Pas calés sur la grille de l'hôte (mode TRANSPORT, et mode NOTE quand l'hôte joue)
+            clockRunning = false;
+            if (jump || ! wasGridLocked)
             {
-                const double tolerance = 8.0 / spq;
-                const bool jump = ! wasPlaying || std::abs (t.ppq - expectedPpq) > tolerance;
-
-                if (settings.sync)
-                {
-                    clockRunning = false;
-                    if (jump)
-                    {
-                        transportStep = stepIndexAt (t.ppq);
-                        stepEvents.push_back ({ 0, transportStep });
-                    }
-                    else
-                    {
-                        // RATE ou SWING changés pendant la lecture : on se recale sans redéclencher
-                        const auto here = stepIndexAt (t.ppq + 0.5 / spq);
-                        if (here != transportStep && here != transportStep + 1)
-                            transportStep = here;
-                    }
-                    for (int guard = 0; guard < 4096; ++guard)
-                    {
-                        const double next = stepStart (transportStep + 1);
-                        const double off = std::ceil ((next - t.ppq) * spq - 1.0e-6);
-                        if (off >= n) break;
-                        ++transportStep;
-                        stepEvents.push_back ({ (int) std::max (0.0, off), transportStep });
-                    }
-                }
-                else if (jump || ! clockRunning)
-                {
-                    clockRunning = true;
-                    clockStep = 0;
-                    clockCountdown = 0.0;
-                }
-                expectedPpq = t.ppq + n / spq;
+                transportStep = stepIndexAt (t.ppq);
+                if (transportMode || ! seqNotes.empty())
+                    stepEvents.push_back ({ 0, transportStep });
+                drunkSeq = INT64_MIN;
             }
             else
             {
-                if (wasPlaying)
-                {
-                    stopSequence();
-                }
+                // RATE ou SWING changés pendant la lecture : on se recale sans redéclencher
+                const auto here = stepIndexAt (t.ppq + 0.5 / spq);
+                if (here != transportStep && here != transportStep + 1)
+                    transportStep = here;
+            }
+            for (int guard = 0; guard < 4096; ++guard)
+            {
+                const double next = stepStart (transportStep + 1);
+                const double off = std::ceil ((next - t.ppq) * spq - 1.0e-6);
+                if (off >= n) break;
+                ++transportStep;
+                stepEvents.push_back ({ (int) std::max (0.0, off), transportStep });
+            }
+        }
+        else if (transportMode)
+        {
+            if (playing)
+            {
+                if (jump || ! clockRunning)
+                    startClock();
+            }
+            else
+            {
                 clockRunning = false;
             }
-            wasPlaying = running;
         }
-        else if (wasPlaying)
+        else
         {
-            // passage en mode NOTE pendant la lecture
-            wasPlaying = false;
-            clockRunning = ! seqNotes.empty();
-            stopSequence();
+            // mode NOTE sans grille : l'horloge interne suit les notes
+            if (wasGridLocked && ! seqNotes.empty() && ! clockRunning)
+                startClock();
+            if (seqNotes.empty())
+                clockRunning = false;
         }
+
+        if (transportMode && wasPlaying && ! playing)
+            stopSequence();
+        wasPlaying = playing;
+        wasGridLocked = gridLocked;
+        if (playing)
+            expectedPpq = t.ppq + n / spq;
 
         // --- Rendu par segments entre les événements ---
         int i = 0, ev = 0;
         size_t se = 0;
+        currentOffset = 0;
         while (i < n)
         {
             int next = n;
@@ -460,17 +522,20 @@ public:
             while (se < stepEvents.size() && stepEvents[se].offset <= i)
             {
                 const auto k = stepEvents[se++].step;
-                doStep (k, stepLengthSync (k));
+                if (transportMode || ! seqNotes.empty())
+                    doStep (k, stepLengthSync (k), stepStart (k));
+                else
+                    displayStep.store (-1);
             }
             if (clockRunning && clockCountdown <= 0.0)
             {
                 const double len = stepLengthClock (clockStep);
-                doStep (clockStep, len);
+                doStep (clockStep, len, clockBeat);
                 ++clockStep;
+                clockBeat += len / spq;
                 clockCountdown += len;
             }
         }
-        // événements MIDI tout à la fin du bloc
         while (ev < numEvents)
             handleMidi (events[ev++]);
 
@@ -501,8 +566,12 @@ public:
             displayPoint.store (-1);
             displayPos.store (-1.0f);
         }
-        if (! (running || clockRunning))
+        const bool sequencing = (transportMode && playing) || (! transportMode && ! seqNotes.empty());
+        if (! sequencing)
+        {
             displayStep.store (-1);
+            if (++idleBlocks > 8) { idleBlocks = 0; refreshDisplay (lastBeat); }   // l'interface suit les réglages même à l'arrêt
+        }
     }
 
     /** Nombre de voix qui jouent (tests). */
@@ -515,6 +584,75 @@ public:
 
     int mainPoint() const noexcept      { return main >= 0 && voices[(size_t) main].active ? voices[(size_t) main].point : -1; }
 
+    /** Ce que le point p jouerait au temps `beat` (tests et affichage). */
+    Effective effective (int p, double beat) const noexcept
+    {
+        p = std::clamp (p, 0, maxPoints - 1);
+        const auto& pp = points[(size_t) p];
+        Effective e;
+        e.pos = std::clamp (pp.pos, 0.0f, 1.0f);
+        e.slot = std::clamp (pp.slot, 0, maxSlots - 1);
+        e.loop = pp.loop;
+        e.loopRate = pp.loopRate;
+        e.rev = pp.rev;
+        e.dly = pp.dly;
+
+        const auto& L = settings.lanes;
+        const std::uint32_t seed = settings.seed;
+
+        if (L[lanePos].on)
+        {
+            const auto c = cycleOf (lanePos, beat);
+            if (settings.refreshSamples)
+            {
+                int loaded[maxSlots], count = 0;
+                for (int s = 0; s < maxSlots; ++s)
+                    if (samples[(size_t) s] != nullptr && samples[(size_t) s]->length() >= 8) loaded[count++] = s;
+                if (count > 0)
+                    e.slot = loaded[std::min (count - 1, (int) (hashRandom (seed, c, 300u + (std::uint32_t) p) * count))];
+            }
+            const double r = hashRandom (seed, c, 100u + (std::uint32_t) p);
+            const float amount = std::clamp (L[lanePos].amount, 0.0f, 1.0f);
+            double pos = amount >= 0.999f ? r * 0.98 : pp.pos + (r - 0.5) * amount;
+            if (pos < 0.0) pos = -pos;
+            if (pos > 0.98) pos = 1.96 - pos;
+            e.pos = snapPos (e.slot, (float) std::clamp (pos, 0.0, 0.98));
+        }
+        if (L[laneLoop].on)
+        {
+            const auto c = cycleOf (laneLoop, beat);
+            e.loop = hashRandom (seed, c, 200u + (std::uint32_t) p) < L[laneLoop].amount;
+            if (settings.loopRandomRate)
+            {
+                static constexpr int choices[] = { 2, 3, 4, 4, 5, 6, 6, 8 };   // 1/8 .. 1/64, surtout 1/16 et 1/32
+                e.loopRate = choices[std::min (7, (int) (hashRandom (seed, c, 250u + (std::uint32_t) p) * 8.0))];
+            }
+        }
+        if (L[laneRev].on)
+        {
+            const auto c = cycleOf (laneRev, beat);
+            const bool on = hashRandom (seed, c, 400u + (std::uint32_t) p) < L[laneRev].amount;
+            e.rev = on ? (pp.rev > 0.001f ? pp.rev : 0.5f) : 0.0f;
+            e.revLane = true;
+        }
+        if (L[laneDly].on)
+        {
+            const auto c = cycleOf (laneDly, beat);
+            const bool on = hashRandom (seed, c, 500u + (std::uint32_t) p) < L[laneDly].amount;
+            e.dly = on ? (pp.dly > 0.001f ? pp.dly : 0.5f) : 0.0f;
+            e.dlyLane = true;
+        }
+        return e;
+    }
+
+    /** Numéro du cycle de rafraîchissement d'une voie au temps `beat`. */
+    std::int64_t cycleOf (int lane, double beat) const noexcept
+    {
+        const int idx = settings.link ? settings.refreshRate : settings.lanes[lane].rate;
+        const double len = Divisions::refresh()[(size_t) std::clamp (idx, 0, (int) Divisions::refresh().size() - 1)];
+        return (std::int64_t) std::floor (beat / len + 1.0e-7);
+    }
+
 private:
     //==========================================================================
     struct Voice
@@ -523,17 +661,18 @@ private:
         int point = 0, slot = 0, fxUnit = 0, dir = forward;
         double pos = 0.0, startPos = 0.0, lo = 0.0, hi = 0.0, rate = 1.0;
         int ppDir = 1;
-        double stutterPeriod = 0.0, stutterCount = 0.0, stutterRamp = 1.0;
+        double loopPeriod = 0.0, loopCount = 0.0, loopRamp = 1.0;
         float env = 0.0f, atk = 1.0f, rel = 1.0f;
         std::int64_t gateLeft = -1;
         float velocity = 1.0f;
         int transpose = 0;
         bool reversed = false;
+        bool revLane = false, dlyLane = false;
+        float effRev = 0.0f, effDly = 0.0f;
 
-        // réglages lissés
         float gl = 0.0f, gr = 0.0f, tgl = 0.0f, tgr = 0.0f;
         float rev = 0.0f, dly = 0.0f, trev = 0.0f, tdly = 0.0f;
-        int filterMode = 0;   // 0 rien, 1 passe-bas, 2 passe-haut
+        int filterMode = 0;
         float a1 = 0, a2 = 0, a3 = 0, k = 1.1f;
         float ic1[2] {}, ic2[2] {};
     };
@@ -559,12 +698,56 @@ private:
         return x < 0.0f ? -y : y;
     }
 
+    static std::int64_t floorDiv (std::int64_t a, std::int64_t b) noexcept
+    {
+        return a >= 0 ? a / b : -((-a + b - 1) / b);
+    }
+
+    //==========================================================================
+    float snapPos (int slot, float pos) const noexcept
+    {
+        const Sample* s = samples[(size_t) slot];
+        if (s == nullptr || s->length() < 8 || settings.snap == snapOff) return pos;
+        const int len = s->length();
+        const int at = std::clamp ((int) std::lround (pos * (len - 1)), 0, len - 1);
+        if (settings.snap == snapOnsets)
+        {
+            const auto& on = s->onsets;
+            if (on.empty()) return pos;
+            auto it = std::lower_bound (on.begin(), on.end(), at);
+            int best = it == on.end() ? on.back() : *it;
+            if (it != on.begin() && (it == on.end() || at - *(it - 1) < *it - at))
+                best = *(it - 1);
+            return (float) best / (float) (len - 1);
+        }
+        const auto& d = s->ch[0];
+        const int range = (int) (0.005 * s->sampleRate);
+        for (int off = 0; off < range; ++off)
+            for (int sgn = -1; sgn <= 1; sgn += 2)
+            {
+                const int i = at + sgn * off;
+                if (i > 0 && i < len && (d[(size_t) i - 1] <= 0.0f) != (d[(size_t) i] <= 0.0f))
+                    return (float) i / (float) (len - 1);
+            }
+        return pos;
+    }
+
+    void refreshDisplay (double beat)
+    {
+        for (int p = 0; p < maxPoints; ++p)
+        {
+            const auto e = effective (p, beat);
+            effPos[(size_t) p].store (e.pos);
+            effSlot[(size_t) p].store (e.slot);
+            effFlags[(size_t) p].store ((e.loop ? 1 : 0) | (e.rev > 0.001f ? 2 : 0) | (e.dly > 0.001f ? 4 : 0));
+        }
+    }
+
     //==========================================================================
     // Temps
     double rateQN() const noexcept         { return Divisions::rate()[(size_t) std::clamp (settings.rate, 0, (int) Divisions::rate().size() - 1)]; }
     double swingAmount() const noexcept    { return std::clamp ((double) settings.swing, 0.0, 0.75) * 0.5; }
 
-    /** Début (en noires) du pas k, swing compris (les pas impairs sont retardés). */
     double stepStart (std::int64_t k) const noexcept
     {
         const double L = rateQN();
@@ -598,7 +781,7 @@ private:
             if (settings.drift > 0.0f)
             {
                 const double r = hashRandom (settings.seed, randomKey (k), 7) * 2.0 - 1.0;
-                len *= std::pow (2.0, r * settings.drift);   // jusqu'à ×2 / ÷2
+                len *= std::pow (2.0, r * settings.drift);
             }
         }
         return std::max (16.0, len);
@@ -609,48 +792,103 @@ private:
         return settings.lock ? posMod (k, std::max (1, settings.steps)) : k;
     }
 
+    void startClock()
+    {
+        clockRunning = true;
+        clockStep = 0;
+        clockCountdown = 0.0;
+        clockBeat = 0.0;
+        drunkSeq = INT64_MIN;
+    }
+
     //==========================================================================
-    void doStep (std::int64_t k, double lengthSamples)
+    int pickPoint (std::int64_t seq, int n)
+    {
+        switch (settings.mode)
+        {
+            case modeDown:   return n - 1 - (int) posMod (seq, n);
+            case modeUpDown:
+            {
+                if (n == 1) return 0;
+                const int period = 2 * n - 2;
+                const int r = (int) posMod (seq, period);
+                return r < n ? r : period - r;
+            }
+            case modeRandom: return std::min (n - 1, (int) (hashRandom (settings.seed, seq, 2) * n));
+            case modeShuffle:
+            {
+                // chaque tour joue tous les points une fois, dans un ordre tiré au hasard
+                const auto cycle = floorDiv (seq, n);
+                int perm[maxPoints];
+                for (int i = 0; i < n; ++i) perm[i] = i;
+                for (int i = n - 1; i > 0; --i)
+                {
+                    const int j = std::min (i, (int) (hashRandom (settings.seed, cycle, 600u + (std::uint32_t) i) * (i + 1)));
+                    std::swap (perm[i], perm[j]);
+                }
+                return perm[posMod (seq, n)];
+            }
+            case modeDrunk:
+            {
+                if (seq != drunkSeq)
+                {
+                    if (drunkSeq == INT64_MIN) drunkPos = 0;
+                    else
+                    {
+                        const double r = hashRandom (settings.seed, seq, 5);
+                        drunkPos = (int) posMod (drunkPos + (r < 0.42 ? -1 : (r < 0.84 ? 1 : 0)), n);
+                    }
+                    drunkSeq = seq;
+                }
+                return std::clamp (drunkPos, 0, n - 1);
+            }
+            default:         return (int) posMod (seq, n);
+        }
+    }
+
+    void doStep (std::int64_t k, double lengthSamples, double beat)
     {
         const int steps = std::clamp (settings.steps, 1, maxSteps);
         const int pos = (int) posMod (k, steps);
         displayStep.store (pos);
+        lastBeat = beat;
+        refreshDisplay (beat);
+
+        // même pas au même instant (note posée pile sur un pas) : une seule fois
+        const auto now = sampleClock + currentOffset;
+        if (k == lastStepK && now == lastStepTime) return;
+        lastStepK = k;
+        lastStepTime = now;
 
         if (! pointNotes.empty())
             return;   // une note de point tenue a la priorité
 
         const auto key = randomKey (k);
         const std::int64_t gate = settings.gate >= 0.999f ? -1 : std::max<std::int64_t> (1, (std::int64_t) (settings.gate * lengthSamples));
-
-        if (hashRandom (settings.seed, key, 1) >= settings.chance)
-        {
-            extendMain (gate);
-            return;
-        }
+        const bool playingNow = main >= 0 && voices[(size_t) main].active && ! voices[(size_t) main].releasing;
 
         const int numPoints = std::clamp (settings.numPoints, 1, maxPoints);
         int point = -1;
-        switch (settings.mode)
+        if (settings.mode == modeGrid)
         {
-            case modeCycle:
-                point = (int) posMod (settings.lock ? pos : k, numPoints);
-                break;
-            case modeRandom:
-                point = std::min (numPoints - 1, (int) (hashRandom (settings.seed, key, 2) * numPoints));
-                break;
-            default:
-            {
-                const int v = pattern[(size_t) pos];
-                if (v == stepTie) { extendMain (gate); return; }
-                if (v >= stepRest) { leaveMain(); log (-1, pos); return; }
-                point = v - 1;
-                break;
-            }
+            if (hashRandom (settings.seed, key, 1) >= settings.chance) { extendMain (gate); return; }
+            const int v = pattern[(size_t) pos];
+            if (v == stepTie) { extendMain (gate); return; }
+            if (v >= stepRest) { leaveMain(); log (-1, pos); return; }
+            point = v - 1;
+        }
+        else
+        {
+            const int hold = std::clamp (settings.hold, 1, 16);
+            const auto idx = settings.lock ? posMod (k, steps) : k;
+            if (posMod (idx, hold) != 0 && playingNow) { extendMain (gate); return; }
+            if (hashRandom (settings.seed, key, 1) >= settings.chance) { extendMain (gate); return; }
+            point = pickPoint (floorDiv (idx, hold), numPoints);
         }
 
         const bool rev = hashRandom (settings.seed, key, 3) < settings.reverseChance;
         const double scatter = hashRandom (settings.seed, key, 4) * 2.0 - 1.0;
-        triggerPoint (point, 1.0f, gate, rev, scatter, false);
+        triggerPoint (point, 1.0f, gate, rev, scatter, false, beat);
         log (point, pos);
     }
 
@@ -666,7 +904,6 @@ private:
             voices[(size_t) main].gateLeft = gate;
     }
 
-    /** Le point en cours s'arrête (REST, fin de séquence). */
     void leaveMain()
     {
         if (main >= 0 && voices[(size_t) main].active)
@@ -684,11 +921,12 @@ private:
             leaveMain();
     }
 
-    void triggerPoint (int p, float velocity, std::int64_t gate, bool reverseIt, double scatter, bool fromNote)
+    void triggerPoint (int p, float velocity, std::int64_t gate, bool reverseIt, double scatter, bool fromNote, double beat)
     {
         p = std::clamp (p, 0, maxPoints - 1);
         const auto& pp = points[(size_t) p];
-        const Sample* s = samples[(size_t) std::clamp (pp.slot, 0, maxSlots - 1)];
+        const auto eff = effective (p, beat);
+        const Sample* s = samples[(size_t) eff.slot];
         if (s == nullptr || s->length() < 8)
         {
             leaveMain();
@@ -708,38 +946,42 @@ private:
         v = Voice();
         v.active = true;
         v.point = p;
-        v.slot = std::clamp (pp.slot, 0, maxSlots - 1);
+        v.slot = eff.slot;
         v.fxUnit = activeFx;
         v.fromNote = fromNote;
         v.velocity = velocity;
         v.transpose = transpose;
         v.gateLeft = gate;
         v.reversed = reverseIt;
+        v.revLane = eff.revLane;
+        v.dlyLane = eff.dlyLane;
+        v.effRev = eff.rev;
+        v.effDly = eff.dly;
         v.dir = pp.dir;
         if (reverseIt && v.dir != pingPong)
             v.dir = v.dir == forward ? reverse : forward;
         v.ppDir = (reverseIt && v.dir == pingPong) ? -1 : 1;
 
         const int len = s->length();
-        double start = (double) std::clamp (pp.pos, 0.0f, 1.0f) * (len - 1);
+        double start = (double) eff.pos * (len - 1);
         start += scatter * settings.scatterMs * 0.001 * s->sampleRate;
         start = std::clamp (start, 0.0, (double) len - 2.0);
         v.pos = v.startPos = start;
 
-        const float fadeSamples = (float) std::max (8.0, settings.fadeMs * 0.001 * sr);
-        v.atk = 1.0f / fadeSamples;
-        v.rel = 1.0f / fadeSamples;
+        const double attackSamples = std::max (1.0, settings.attackMs * 0.001 * sr);
+        v.atk = (float) (1.0 / attackSamples);
+        v.rel = (float) (1.0 / std::max (8.0, settings.releaseMs * 0.001 * sr));
         v.env = 0.0f;
 
         updateVoice (v);
         v.gl = v.tgl; v.gr = v.tgr; v.rev = v.trev; v.dly = v.tdly;
 
-        const double div = Divisions::stutter()[(size_t) std::clamp (pp.stutter, 0, (int) Divisions::stutter().size() - 1)];
+        const double div = eff.loop ? Divisions::loop()[(size_t) std::clamp (eff.loopRate, 0, (int) Divisions::loop().size() - 1)] : 0.0;
         if (div > 0.0 && v.dir != pingPong)
         {
-            v.stutterPeriod = std::max (32.0, div * spq);
-            v.stutterRamp = std::min (0.0015 * sr, v.stutterPeriod * 0.25);
-            v.stutterCount = 0.0;
+            v.loopPeriod = std::max (32.0, div * spq);
+            v.loopRamp = std::clamp (attackSamples, 8.0, v.loopPeriod * 0.25);
+            v.loopCount = 0.0;
         }
         if (v.dir == pingPong)
         {
@@ -759,7 +1001,6 @@ private:
         for (int i = 0; i < maxVoices; ++i)
             if (! voices[(size_t) i].active)
                 return i;
-        // vole la voix la plus avancée dans son extinction (jamais la principale)
         int best = -1;
         float lowest = 2.0f;
         for (int i = 0; i < maxVoices; ++i)
@@ -803,7 +1044,7 @@ private:
             {
                 pointNotes.erase (std::remove (pointNotes.begin(), pointNotes.end(), e.note), pointNotes.end());
                 pointNotes.push_back (e.note);
-                triggerPoint (p, std::clamp (e.velocity, 0.0f, 1.0f), -1, false, 0.0, true);
+                triggerPoint (p, std::clamp (e.velocity, 0.0f, 1.0f), -1, false, 0.0, true, currentBeat());
                 log (p, -1);
             }
             else
@@ -813,13 +1054,9 @@ private:
                 if (wasTop)
                 {
                     if (! pointNotes.empty())
-                    {
-                        triggerPoint (pointNotes.back() - firstPointNote, 1.0f, -1, false, 0.0, true);
-                    }
+                        triggerPoint (pointNotes.back() - firstPointNote, 1.0f, -1, false, 0.0, true, currentBeat());
                     else if (main >= 0 && voices[(size_t) main].fromNote)
-                    {
                         leaveMain();
-                    }
                 }
             }
             return;
@@ -827,14 +1064,24 @@ private:
 
         if (e.on && e.velocity > 0.0f)
         {
+            const bool first = seqNotes.empty();
             seqNotes.erase (std::remove (seqNotes.begin(), seqNotes.end(), e.note), seqNotes.end());
             seqNotes.push_back (e.note);
             transpose = std::clamp (e.note - 60, -48, 48);
-            if (settings.trigger == triggerNote && ! clockRunning)
+            if (settings.trigger == triggerNote && first)
             {
-                clockRunning = true;
-                clockStep = 0;
-                clockCountdown = 0.0;
+                if (gridLocked)
+                {
+                    // note longue + Ableton qui joue : on démarre sur le pas de la grille où tombe la note
+                    const double ppq = blockPpq + currentOffset / spq;
+                    const auto k = stepIndexAt (ppq + 0.5 / spq);
+                    drunkSeq = INT64_MIN;
+                    doStep (k, (stepStart (k + 1) - ppq) * spq, stepStart (k));
+                }
+                else if (! clockRunning)
+                {
+                    startClock();
+                }
             }
         }
         else
@@ -847,6 +1094,12 @@ private:
                 stopSequence();
             }
         }
+    }
+
+    double currentBeat() const noexcept
+    {
+        if (gridLocked) return blockPpq + currentOffset / spq;
+        return lastBeat;
     }
 
     //==========================================================================
@@ -863,8 +1116,8 @@ private:
         const float g = pp.gain * v.velocity;
         v.tgl = g * std::cos (angle) * 1.41421356f;
         v.tgr = g * std::sin (angle) * 1.41421356f;
-        v.trev = std::clamp (pp.rev, 0.0f, 1.0f);
-        v.tdly = std::clamp (pp.dly, 0.0f, 1.0f);
+        v.trev = std::clamp (v.revLane ? v.effRev : pp.rev, 0.0f, 1.0f);
+        v.tdly = std::clamp (v.dlyLane ? v.effDly : pp.dly, 0.0f, 1.0f);
 
         const float f = std::clamp (pp.filter, -1.0f, 1.0f);
         if (std::abs (f) < 0.01f)
@@ -926,7 +1179,6 @@ private:
                 const Sample* smp = samples[(size_t) v.slot];
                 if (smp == nullptr || smp->length() < 8) { v.active = false; continue; }
 
-                // enveloppe
                 if (v.releasing)
                 {
                     v.env -= v.rel;
@@ -939,24 +1191,23 @@ private:
                 if (v.gateLeft > 0 && --v.gateLeft == 0)
                     v.releasing = true;
 
-                // stutter
-                float sg = 1.0f;
-                if (v.stutterPeriod > 0.0)
+                // LOOP : retour au départ toutes les divisions, fondus de la durée d'ATTACK
+                float lg = 1.0f;
+                if (v.loopPeriod > 0.0)
                 {
-                    if (v.stutterCount >= v.stutterPeriod)
+                    if (v.loopCount >= v.loopPeriod)
                     {
-                        v.stutterCount -= v.stutterPeriod;
+                        v.loopCount -= v.loopPeriod;
                         v.pos = v.startPos;
                     }
-                    const double edge = std::min (v.stutterCount + 1.0, v.stutterPeriod - v.stutterCount);
-                    sg = (float) std::clamp (edge / v.stutterRamp, 0.0, 1.0);
-                    v.stutterCount += 1.0;
+                    const double edge = std::min (v.loopCount + 1.0, v.loopPeriod - v.loopCount);
+                    lg = (float) std::clamp (edge / v.loopRamp, 0.0, 1.0);
+                    v.loopCount += 1.0;
                 }
 
                 float l = readCubic (smp->ch[0], v.pos);
                 float r = readCubic (smp->ch[1], v.pos);
 
-                // avance
                 if (v.dir == pingPong)
                 {
                     v.pos += std::abs (v.rate) * v.ppDir;
@@ -969,7 +1220,6 @@ private:
                     v.pos += v.rate;
                 }
 
-                // filtre
                 if (v.filterMode != 0)
                 {
                     float* io[2] = { &l, &r };
@@ -990,7 +1240,8 @@ private:
                 v.rev += (v.trev - v.rev) * 0.003f;
                 v.dly += (v.tdly - v.dly) * 0.003f;
 
-                const float e = v.env * sg;
+                // le LOOP passe avant la reverb et le delay : les envois prennent le son déjà bouclé
+                const float e = v.env * lg;
                 l *= e * v.gl;
                 r *= e * v.gr;
                 sumL += l;
@@ -1001,7 +1252,6 @@ private:
                 u.inDly[0] += l * v.dly; u.inDly[1] += r * v.dly;
             }
 
-            // effets
             const float fadeStep = (float) (1.0 / (0.006 * sr));
             for (auto& u : fx)
             {
@@ -1043,13 +1293,14 @@ private:
     std::array<FxUnit, numFxUnits> fx {};
     int activeFx = 0;
 
-    bool wasPlaying = false;
+    bool wasPlaying = false, wasGridLocked = false, gridLocked = false;
+    double blockPpq = 0.0;
     std::int64_t transportStep = 0;
     double expectedPpq = -1.0e9;
     std::vector<StepEvent> stepEvents;
 
     bool clockRunning = false;
-    double clockCountdown = 0.0;
+    double clockCountdown = 0.0, clockBeat = 0.0, lastBeat = 0.0;
     std::int64_t clockStep = 0;
 
     std::vector<int> seqNotes, pointNotes;
@@ -1057,5 +1308,7 @@ private:
     std::int64_t sampleClock = 0;
     int currentOffset = 0;
     float outGainNow = 1.0f;
+    std::int64_t lastStepK = INT64_MIN, lastStepTime = -1, drunkSeq = INT64_MIN;
+    int drunkPos = 0, idleBlocks = 0;
 };
 }

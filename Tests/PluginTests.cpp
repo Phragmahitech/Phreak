@@ -99,7 +99,7 @@ static void testParametersAndAudio (const juce::File& dir)
 {
     std::cout << "Parametres, samples, son" << std::endl;
     auto p = makePlugin();
-    check (p->getParameters().size() == 28 + 16 * 11 + 64, "nombre de parametres : " + juce::String (p->getParameters().size()));
+    check (p->getParameters().size() == 46 + 16 * 12 + 64, "nombre de parametres : " + juce::String (p->getParameters().size()));
     check (p->acceptsMidi() && p->getTotalNumInputChannels() == 0 && p->getTotalNumOutputChannels() == 2, "instrument stereo");
 
     FakeHead head;
@@ -120,6 +120,34 @@ static void testParametersAndAudio (const juce::File& dir)
         onsetsOk &= std::abs (s.data->onsets[h] - (0.25 + 0.5 * h) * 44100.0) < 300.0;
     check (onsetsOk, "position des transitoires");
 
+    check (juce::roundToInt (p->getParam (P::triggerId)) == 1, "NOTE par defaut");
+    head.ppq = 0.0;
+    out = render (*p, head, 48000);
+    check (out.getMagnitude (0, 0, 48000) < 1.0e-6f, "mode NOTE sans note : silence");
+
+    // une note longue avec Ableton qui joue, tous les rafraichissements : sequence sans fin
+    {
+        p->setParam (P::modeId, 5.0f);   // SHUFFLE
+        for (int l = 0; l < 4; ++l) p->setParam (P::laneId (l, "On"), 1.0f);
+        p->setParam (P::refreshRateId, 1.0f);   // 2 temps
+        juce::MidiBuffer longNote;
+        longNote.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+        head.ppq = 0.0;
+        out = render (*p, head, 48000 * 6, 512, longNote);
+        bool finite = true;
+        for (int i = 0; i < out.getNumSamples(); ++i) finite &= std::isfinite (out.getSample (0, i));
+        check (finite && out.getMagnitude (0, 0, 48000 * 6) > 0.01f && out.getMagnitude (0, 48000 * 5, 48000) > 0.01f, "note longue");
+        // les positions jouées ont changé d'un rafraîchissement à l'autre
+        check (p->getEngine().effPos[0].load() >= 0.0f, "positions rafraichies affichees");
+        juce::MidiBuffer off;
+        off.addEvent (juce::MidiMessage::noteOff (1, 60), 0);
+        render (*p, head, 512, 512, off);
+        for (int l = 0; l < 4; ++l) p->setParam (P::laneId (l, "On"), 0.0f);
+        p->setParam (P::modeId, 0.0f);
+        p->reset();   // vide les queues de reverb / delay
+    }
+
+    p->setParam (P::triggerId, 0.0f);   // TRANSPORT
     head.ppq = 0.0;
     out = render (*p, head, 48000);
     check (out.getMagnitude (0, 0, 48000) > 0.01f, "son avec le transport");
@@ -144,7 +172,7 @@ static void testParametersAndAudio (const juce::File& dir)
     // tout le hasard, réglages extrêmes : pas de NaN
     juce::Random rng (3);
     p->setParam (P::pointsId, 16.0f);
-    p->randomizePoints (P::rndPositions | P::rndDirections | P::rndStutter | P::rndPitch | P::rndFx | P::rndTails, rng);
+    p->randomizePoints (P::rndPositions | P::rndDirections | P::rndLoops | P::rndPitch | P::rndFx | P::rndTails, rng);
     p->randomizePattern (rng);
     p->setParam (P::modeId, 2.0f);
     p->setParam (P::scatterId, 300.0f);
@@ -226,7 +254,8 @@ static void testEditor (const juce::File& snapshotDir)
     p->setSampleData (1, longer, "Pad dark 30s");
 
     p->setParam (P::pointId (2, "Rev"), 60.0f);
-    p->setParam (P::pointId (2, "Stutter"), 5.0f);
+    p->setParam (P::pointId (2, "Loop"), 1.0f);
+    p->setParam (P::pointId (2, "LoopRate"), 4.0f);
     p->setParam (P::pointId (2, "Tail"), 1.0f);
     p->setParam (P::pointId (2, "Pitch"), -5.0f);
     p->setParam (P::pointId (9, "Sample"), 1.0f);
@@ -279,6 +308,7 @@ static void testEditor (const juce::File& snapshotDir)
     }
 
     // jouer un peu pour la tête de lecture
+    p->setParam (P::triggerId, 0.0f);
     FakeHead head;
     p->setPlayHead (&head);
     render (*p, head, 30000);
@@ -300,8 +330,14 @@ static void testEditor (const juce::File& snapshotDir)
     facade.selectPoint (9);
     wave.setView (0.2, 0.1);
     snapshot ("phreak-slot2-zoom");
-    p->setParam (P::modeId, 2.0f);
-    snapshot ("phreak-random");
+    p->setParam (P::modeId, 5.0f);
+    p->setParam (P::laneId (0, "On"), 1.0f);
+    p->setParam (P::laneId (1, "On"), 1.0f);
+    p->setParam (P::laneId (2, "On"), 1.0f);
+    p->setParam (P::laneId (1, "Amount"), 60.0f);
+    facade.selectPoint (2);
+    render (*p, head, 30000);
+    snapshot ("phreak-refresh");
     editor->setUiScale (0.75f);
     check (std::abs (editor->getUiScale() - 0.75f) < 0.01f, "echelle");
     snapshot ("phreak-75");
