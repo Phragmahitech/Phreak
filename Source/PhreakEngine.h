@@ -501,16 +501,29 @@ public:
             expectedPpq = t.ppq + n / spq;
 
         // --- Rendu par segments entre les événements ---
-        int i = 0, ev = 0;
+        int i = 0, ev = 0, stall = 0;
         size_t se = 0;
         currentOffset = 0;
         while (i < n)
         {
+            if (! std::isfinite (clockCountdown)) clockCountdown = 0.0;
+
             int next = n;
             if (ev < numEvents) next = std::min (next, std::max (i, events[ev].offset));
             if (se < stepEvents.size()) next = std::min (next, stepEvents[se].offset);
-            if (clockRunning) next = std::min (next, i + std::max (0, (int) std::ceil (clockCountdown - 1.0e-9)));
+            if (clockRunning)
+            {
+                // Même seuil que plus bas pour déclencher le pas : un reste minuscule dû aux
+                // arrondis (1e-11) ne doit jamais laisser la boucle tourner sur place.
+                const int gap = clockCountdown <= clockEpsilon ? 0
+                              : (int) std::min ((double) n, std::ceil (clockCountdown - clockEpsilon));
+                next = std::min (next, i + gap);
+            }
             next = std::clamp (next, i, n);
+
+            // Garde-fou : le fil audio ne doit jamais rester bloqué au même endroit.
+            if (next == i && ++stall > 64) { next = i + 1; stall = 0; }
+            else if (next > i) stall = 0;
 
             render (outL, outR, i, next);
             if (clockRunning) clockCountdown -= (next - i);
@@ -527,7 +540,7 @@ public:
                 else
                     displayStep.store (-1);
             }
-            if (clockRunning && clockCountdown <= 0.0)
+            if (clockRunning && clockCountdown <= clockEpsilon)
             {
                 const double len = stepLengthClock (clockStep);
                 doStep (clockStep, len, clockBeat);
@@ -1282,6 +1295,7 @@ private:
     }
 
     //==========================================================================
+    static constexpr double clockEpsilon = 1.0e-6;
     double sr = 44100.0, bpm = 120.0, spq = 22050.0;
     Settings settings;
     std::array<PointParams, maxPoints> points {};

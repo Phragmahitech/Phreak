@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <vector>
+#include <random>
 
 using namespace phreak;
 
@@ -441,6 +442,42 @@ int main()
         for (int i = 0; i < 100; ++i) early = std::max (early, std::abs (r.L[(size_t) i]));
         for (int i = 1000; i < 1300; ++i) late = std::max (late, std::abs (r.L[(size_t) i]));
         CHECK (early < 0.15f * late && late > 0.3f, "attack %g %g", early, late);
+    }
+
+    // 21. Régression du 2026-11-27 (Ableton bloqué) : le compte à rebours du pas suivant
+    //     pouvait rester à ~1e-11 et la boucle de rendu tournait sans fin (mode NOTE, Ableton
+    //     à l'arrêt, swing / drift). Configurations tirées au hasard : le test se termine.
+    {
+        Sample s;
+        s.sampleRate = 44100;
+        for (auto& c : s.ch) { c.resize (200000); for (size_t i = 0; i < c.size(); ++i) c[i] = 0.3f * (float) std::sin (i * 0.05); }
+        std::mt19937 rng (1);
+        bool finite = true;
+        for (int cfg = 0; cfg < 300; ++cfg)
+        {
+            const double sr = (rng() % 2) ? 44100 : 48000;
+            Engine e;
+            e.prepare (sr, 1024);
+            e.setSample (0, &s);
+            Settings st;
+            st.trigger = (int) (rng() % 2); st.sync = rng() % 3 != 0; st.swing = (float) (rng() % 4) * 0.21f; st.drift = (float) (rng() % 3) * 0.4f;
+            st.freeMs = 10.0f + (float) (rng() % 2000) / 7.0f; st.rate = (int) (rng() % 10); st.mode = (int) (rng() % 7); st.hold = 1 + (int) (rng() % 3);
+            e.setSettings (st);
+            std::vector<float> L (1024), R (1024);
+            double ppq = (rng() % 1000) / 7.0;
+            const double bpm = 60.0 + (rng() % 2000) / 9.7;
+            const bool play = rng() % 2;
+            MidiEvent ev[2] { { (int) (rng() % 300), true, 60, 1.0f }, { (int) (rng() % 300), true, 40, 1.0f } };
+            for (int b = 0; b < 400; ++b)
+            {
+                const int n = 1 + (int) (rng() % 1024);
+                Transport t { play, ppq, bpm };
+                e.process (L.data(), R.data(), n, t, b == 0 ? ev : nullptr, b == 0 ? 2 : 0);
+                for (int k = 0; k < n; ++k) finite &= std::isfinite (L[(size_t) k]);
+                if (play) ppq += n / (60.0 / bpm * sr);
+            }
+        }
+        CHECK (finite, "300 configurations au hasard sans blocage ni NaN");
     }
 
     std::printf ("%d verifications, %d echecs\n", checks, failures);
