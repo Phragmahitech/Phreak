@@ -11,7 +11,7 @@ PhreakLookAndFeel::PhreakLookAndFeel()
     semiBoldFace = juce::Typeface::createSystemTypefaceFor (BinaryData::ChakraPetchSemiBold_ttf, (size_t) BinaryData::ChakraPetchSemiBold_ttfSize);
     boldFace = juce::Typeface::createSystemTypefaceFor (BinaryData::ChakraPetchBold_ttf, (size_t) BinaryData::ChakraPetchBold_ttfSize);
 
-    setColour (juce::PopupMenu::backgroundColourId, juce::Colour (0xff142229));
+    setColour (juce::PopupMenu::backgroundColourId, juce::Colour (0xff24363e));
     setColour (juce::PopupMenu::textColourId, text());
     setColour (juce::PopupMenu::highlightedBackgroundColourId, accent());
 }
@@ -48,12 +48,12 @@ juce::Path PhreakLookAndFeel::chamfered (juce::Rectangle<float> r, float cut)
 void PhreakLookAndFeel::drawPanel (juce::Graphics& g, juce::Rectangle<float> r, const juce::String& title, const juce::Font& f)
 {
     const auto shape = chamfered (r, 8.0f);
-    juce::DropShadow (juce::Colours::black.withAlpha (0.45f), 10, { 0, 3 }).drawForPath (g, shape);
+    juce::DropShadow (juce::Colours::black.withAlpha (0.28f), 14, { 0, 4 }).drawForPath (g, shape);
     g.setGradientFill (juce::ColourGradient (panelTop(), 0.0f, r.getY(), panelBottom(), 0.0f, r.getBottom(), false));
     g.fillPath (shape);
-    g.setColour (edge());
-    g.strokePath (shape, juce::PathStrokeType (1.0f));
-    g.setColour (juce::Colours::white.withAlpha (0.06f));
+    g.setColour (edge().withAlpha (0.8f));
+    g.strokePath (shape, juce::PathStrokeType (0.6f));
+    g.setColour (juce::Colours::white.withAlpha (0.10f));
     g.drawHorizontalLine ((int) r.getY() + 1, r.getX() + 8.0f, r.getRight() - 8.0f);
 
     if (title.isNotEmpty())
@@ -90,12 +90,12 @@ void PhreakLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w
     const float radius = juce::jmin (area.getWidth(), area.getHeight()) * 0.5f - (big ? 6.0f : 3.0f);
     const auto c = area.getCentre();
     const float arcR = radius, bodyR = radius - (big ? 10.0f : 5.5f);
-    const float thick = big ? 6.0f : 3.5f;
+    const float thick = big ? 2.6f : 1.6f;   // traits fins
 
     // Piste
     juce::Path track;
     track.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, start, end, true);
-    g.setColour (juce::Colour (0xff081014));
+    g.setColour (juce::Colour (0xff1a2930));
     g.strokePath (track, juce::PathStrokeType (thick, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
     // Valeur (dégradé orange -> mauve ; depuis le centre pour les réglages bipolaires)
@@ -115,18 +115,18 @@ void PhreakLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w
     }
 
     // Corps : anneau cuivre, centre turquoise sombre
-    juce::DropShadow (juce::Colours::black.withAlpha (0.6f), big ? 12 : 6, { 0, big ? 4 : 2 })
+    juce::DropShadow (juce::Colours::black.withAlpha (0.35f), big ? 14 : 7, { 0, big ? 4 : 2 })
         .drawForPath (g, [&] { juce::Path p; p.addEllipse (juce::Rectangle<float> (bodyR * 2.0f, bodyR * 2.0f).withCentre (c)); return p; }());
-    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff2a3f4a), c.x, c.y - bodyR, juce::Colour (0xff111c22), c.x, c.y + bodyR, false));
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff4f6873), c.x, c.y - bodyR, juce::Colour (0xff2a3c44), c.x, c.y + bodyR, false));
     g.fillEllipse (juce::Rectangle<float> (bodyR * 2.0f, bodyR * 2.0f).withCentre (c));
     g.setColour (lilac().withAlpha (enabled ? 0.85f : 0.35f));
-    g.drawEllipse (juce::Rectangle<float> (bodyR * 2.0f, bodyR * 2.0f).withCentre (c), big ? 1.6f : 1.0f);
+    g.drawEllipse (juce::Rectangle<float> (bodyR * 2.0f, bodyR * 2.0f).withCentre (c), big ? 0.9f : 0.6f);
 
     // Index
     const auto tip = c.getPointOnCircumference (bodyR - (big ? 6.0f : 3.0f), angle);
     const auto base = c.getPointOnCircumference (bodyR * (big ? 0.35f : 0.25f), angle);
     g.setColour (enabled ? text() : text().withAlpha (0.35f));
-    g.drawLine ({ base, tip }, big ? 3.0f : 1.8f);
+    g.drawLine ({ base, tip }, big ? 1.6f : 1.1f);
 }
 
 void PhreakLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool over, bool down)
@@ -141,15 +141,15 @@ void PhreakLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b
         juce::ColourGradient grad (tint, area.getX(), area.getY(), tint == accent() ? mauve() : tint.darker (0.3f), area.getRight(), area.getBottom(), false);
         g.setGradientFill (grad);
         g.fillPath (shape);
-        g.setColour (juce::Colours::white.withAlpha (over ? 0.25f : 0.12f));
-        g.strokePath (shape, juce::PathStrokeType (1.0f));
+        g.setColour (juce::Colours::white.withAlpha (over ? 0.35f : 0.18f));
+        g.strokePath (shape, juce::PathStrokeType (0.6f));
     }
     else
     {
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff1a2a31), 0.0f, area.getY(), juce::Colour (0xff121e24), 0.0f, area.getBottom(), false));
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff3a5059), 0.0f, area.getY(), juce::Colour (0xff2e424a), 0.0f, area.getBottom(), false));
         g.fillPath (shape);
-        g.setColour (over ? tint.withAlpha (0.8f) : edge());
-        g.strokePath (shape, juce::PathStrokeType (1.0f));
+        g.setColour (over ? tint.withAlpha (0.9f) : edge());
+        g.strokePath (shape, juce::PathStrokeType (0.6f));
     }
 
     if (down)
@@ -172,9 +172,9 @@ void PhreakLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& b, 
 
 void PhreakLookAndFeel::drawPopupMenuBackground (juce::Graphics& g, int w, int h)
 {
-    g.fillAll (juce::Colour (0xff142229));
+    g.fillAll (juce::Colour (0xff24363e));
     g.setColour (edge());
-    g.drawRect (0, 0, w, h, 1);
+    g.drawRect (juce::Rectangle<float> (0.0f, 0.0f, (float) w, (float) h), 0.6f);
 }
 
 void PhreakLookAndFeel::drawPopupMenuItem (juce::Graphics& g, const juce::Rectangle<int>& area, bool isSeparator, bool isActive,
@@ -437,7 +437,7 @@ void WaveView::paint (juce::Graphics& g)
                 if (p == selected)
                 {
                     g.setColour (juce::Colours::white);
-                    g.drawRect (flag, 1.0f);
+                    g.drawRect (flag, 0.7f);
                 }
                 g.setColour (juce::Colour (0xff0b1216));
                 g.setFont (lf.font (10.5f, true));
@@ -496,11 +496,11 @@ void WaveView::paint (juce::Graphics& g)
         g.setColour (L::accent().withAlpha (0.15f));
         g.fillRect (area);
         g.setColour (L::accent());
-        g.drawRect (area, 2.0f);
+        g.drawRect (area, 1.0f);
     }
 
-    g.setColour (L::edge());
-    g.drawRect (area, 1.0f);
+    g.setColour (L::edge().withAlpha (0.8f));
+    g.drawRect (area, 0.6f);
 }
 
 void WaveView::mouseDown (const juce::MouseEvent& e)
@@ -697,7 +697,7 @@ void StepGrid::paint (juce::Graphics& g)
         const int v = value (k);
         const auto shape = L::chamfered (r, 3.0f);
 
-        juce::Colour fill = juce::Colour (0xff121e24);
+        juce::Colour fill = juce::Colour (0xff22333b);
         juce::String label;
         if (v >= 1 && v <= P::numPoints)
         {
@@ -706,12 +706,12 @@ void StepGrid::paint (juce::Graphics& g)
         }
         else if (v == phreak::stepTie)
         {
-            fill = juce::Colour (0xff1c2c33);
+            fill = juce::Colour (0xff2c3f47);
             label = "-";
         }
         else
         {
-            fill = juce::Colour (0xff0a1013);
+            fill = juce::Colour (0xff18252b);
             label = "x";
         }
         if (! on) fill = fill.withMultipliedAlpha (0.25f);
@@ -719,7 +719,7 @@ void StepGrid::paint (juce::Graphics& g)
         g.setColour (fill);
         g.fillPath (shape);
         g.setColour (k == shownStep ? juce::Colours::white : L::edge());
-        g.strokePath (shape, juce::PathStrokeType (k == shownStep ? 2.0f : 1.0f));
+        g.strokePath (shape, juce::PathStrokeType (k == shownStep ? 1.2f : 0.6f));
 
         g.setColour ((v >= 1 && v <= P::numPoints) ? juce::Colour (0xff0b1216).withAlpha (on ? 1.0f : 0.4f)
                                                      : L::dim().withAlpha (on ? 1.0f : 0.3f));
@@ -1307,7 +1307,7 @@ void PhreakFacade::paint (juce::Graphics& g)
 
     // Indicateur de sortie
     auto meter = juce::Rectangle<float> ((float) fxPanel.getRight() - 22.0f, (float) fxPanel.getY() + 8.0f, 10.0f, 16.0f);
-    g.setColour (juce::Colour (0xff081014));
+    g.setColour (juce::Colour (0xff17252c));
     g.fillRect (meter);
     const float lvl = juce::jlimit (0.0f, 1.0f, (outLevel + 60.0f) / 60.0f);
     g.setColour (outLevel > -0.5f ? juce::Colour (0xffff5a6e) : L::accent());

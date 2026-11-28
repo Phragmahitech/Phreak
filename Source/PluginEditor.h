@@ -13,13 +13,13 @@ class PhreakLookAndFeel final : public juce::LookAndFeel_V4
 public:
     PhreakLookAndFeel();
 
-    static juce::Colour ground()      { return juce::Colour (0xff0e181c); }
-    static juce::Colour panelTop()    { return juce::Colour (0xff1e2f36); }
-    static juce::Colour panelBottom() { return juce::Colour (0xff17252b); }
-    static juce::Colour edge()        { return juce::Colour (0xff2b4250); }
-    static juce::Colour screen()      { return juce::Colour (0xff0b1418); }
-    static juce::Colour text()        { return juce::Colour (0xffdde8ee); }
-    static juce::Colour dim()         { return juce::Colour (0xff8aa0ac); }
+    static juce::Colour ground()      { return juce::Colour (0xff1d2a31); }
+    static juce::Colour panelTop()    { return juce::Colour (0xff344a53); }
+    static juce::Colour panelBottom() { return juce::Colour (0xff2b3e46); }
+    static juce::Colour edge()        { return juce::Colour (0xff557282); }
+    static juce::Colour screen()      { return juce::Colour (0xff17262d); }
+    static juce::Colour text()        { return juce::Colour (0xfff2f7fa); }
+    static juce::Colour dim()         { return juce::Colour (0xffb3c6d0); }
     static juce::Colour accent()      { return juce::Colour (0xff3cd2f8); }
     static juce::Colour mauve()       { return juce::Colour (0xff9850e8); }
     static juce::Colour lilac()       { return juce::Colour (0xffc898f8); }
